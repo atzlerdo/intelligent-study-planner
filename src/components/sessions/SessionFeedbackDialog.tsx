@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { CheckCircle2, XCircle, Info, Plus, Check } from 'lucide-react';
-import { Badge } from '../ui/badge';
+// Removed unused Badge import
 import { Slider } from '../ui/slider';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
