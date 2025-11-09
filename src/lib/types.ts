@@ -51,6 +51,7 @@ export interface ScheduledSession {
   completed: boolean;
   completionPercentage: number;
   notes?: string;
+  lastModified?: number; // Unix ms timestamp for merge logic
 }
 
 export interface Session {
