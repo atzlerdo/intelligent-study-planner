@@ -128,7 +128,8 @@ function sessionToCalendarEvent(session: ScheduledSession, course: Course): Cale
   
   return {
     summary: `📚 ${course.name}`,
-    description: `Study session for ${course.name}\n\nType: ${course.type === 'written-exam' ? 'Written Exam' : 'Project'}\nECTS: ${course.ects}\nSemester: ${course.semester || 'N/A'}\n\n${session.notes || ''}`,
+    // Keep the description minimal: only user-provided notes (no extra metadata)
+    description: session.notes || undefined,
     start: {
       dateTime: `${session.date}T${session.startTime}:00`,
       timeZone: timeZone,
