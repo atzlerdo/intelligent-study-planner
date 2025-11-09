@@ -93,6 +93,28 @@ npm run lint     # ESLint with flat config format
 4. **Milestone tracking**: Milestones have no separate deadline enforcement—purely visual tracking
 5. **Course activation**: Automatically activate `planned` courses when first session is created
 
+## Google Calendar Integration
+
+### Two-Way Sync Implementation
+- **OAuth Flow**: `@react-oauth/google` for authentication in `main.tsx`
+- **Sync Logic**: `src/lib/googleCalendar.ts` handles bidirectional sync
+- **Dedicated Calendar**: Creates "Intelligent Study Planner" calendar in user's Google account
+- **Session Metadata**: Uses `extendedProperties` to track app source and session IDs
+
+### Setup Requirements
+1. Google Cloud Project with Calendar API enabled
+2. OAuth 2.0 credentials configured for `http://localhost:5173`
+3. Environment variables in `.env`:
+   - `VITE_GOOGLE_CLIENT_ID`
+   - `VITE_GOOGLE_API_KEY`
+4. See `CALENDAR_SETUP.md` for detailed setup instructions
+
+### Sync Behavior
+- Push: All `ScheduledSession[]` converted to calendar events
+- Pull: Calendar events converted back to sessions (merged, not replaced)
+- Update: Existing events updated by `sessionId` match
+- Delete: Events removed from calendar if session deleted in app
+
 ## Extension Points
 - Add data export/import (no backend planned, could use JSON files)
 - Integrate with university APIs for course catalogs (currently hardcoded in `App.tsx`)

@@ -21,6 +21,7 @@ function App() {
   const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
   const [showPastSessionsReview, setShowPastSessionsReview] = useState(false);
   const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
+  const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);
   
   // Study program state - Default: 95 ECTS completed out of 180 (19 of 36 modules done)
   const [studyProgram, setStudyProgram] = useState<StudyProgram>({
@@ -917,7 +918,7 @@ function App() {
     });
     
     if (editingSession) {
-      const updatedSession = { ...editingSession, ...sessionData };
+      const updatedSession = { ...editingSession, ...sessionData, lastModified: Date.now() };
       console.log('✏️ Updated existing session:', updatedSession);
       setScheduledSessions(prev => prev.map(s => 
         s.id === editingSession.id ? updatedSession : s
@@ -926,6 +927,7 @@ function App() {
       const newSession: ScheduledSession = {
         id: `session-${Date.now()}`,
         ...sessionData,
+        lastModified: Date.now(),
       };
       console.log('✨ Created new session:', newSession);
       
@@ -967,6 +969,7 @@ function App() {
               id: `session-${Date.now()}-${i}`,
               date: localDateStr,
               endDate: localEndDateStr,
+              lastModified: Date.now(),
             });
           }
           
@@ -1007,6 +1010,9 @@ function App() {
     setOriginalSessionBeforeMove(null);
     setEditingSession(undefined);
     setShowSessionDialog(false);
+    
+    // Trigger auto-sync
+    setAutoSyncTrigger(Date.now());
   };
 
   const handleDeleteSession = (sessionId: string) => {
@@ -1015,6 +1021,18 @@ function App() {
     setOriginalSessionBeforeMove(null);
     setEditingSession(undefined);
     setShowSessionDialog(false);
+    
+    // Trigger auto-sync
+    setAutoSyncTrigger(Date.now());
+  };
+
+  // Handle sessions imported from Google Calendar
+  const handleSessionsImported = (importedSessions: ScheduledSession[]) => {
+    console.log('📥 Importing sessions from Google Calendar:', importedSessions.length);
+    
+    // Replace all sessions with the merged ones from the sync
+    // The sync already performed the merge based on lastModified timestamps
+    setScheduledSessions(importedSessions);
   };
 
   // Drag to create session from calendar
@@ -1190,6 +1208,8 @@ function App() {
             onCreateSession={handleCreateSessionFromCalendar}
             onEditCourse={handleEditCourse}
             onSessionMove={handleSessionMove}
+            onSessionsImported={handleSessionsImported}
+            autoSyncTrigger={autoSyncTrigger}
           />
         )}
 
