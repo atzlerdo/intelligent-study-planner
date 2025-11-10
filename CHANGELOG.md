@@ -26,6 +26,9 @@ All notable changes to this project will be documented in this file.
 - Cross-device horizontal swipe/drag week navigation (desktop & mobile)
 - Centered month label on mobile header for visual balance
 - Week number (KW) column retained with improved layout spacing
+- Background sync service (`GoogleCalendarSyncService`) for periodic & visibility-triggered sync
+- Reusable `useGoogleCalendarSync` hook abstracting connect/sync/disconnect state
+- Consistent UI polish across dialogs, buttons, and select components (styling & layout tweaks)
 
 ### Changed
 - Navigation arrows hidden on small screens (mobile) to reduce clutter; desktop behavior unchanged
