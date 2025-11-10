@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
-import type { Course, StudyProgram, ScheduledSession } from '../lib/types';
+import type { Course, StudyProgram, ScheduledSession } from '../types';
 import { WeekCalendar } from './WeekCalendar';
 
 interface DashboardProps {
@@ -23,10 +23,11 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
   const activeCourses = courses.filter(c => c.status === 'active');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
   
-  // Get all sessions for active courses
-  const relevantSessions = scheduledSessions.filter(session => 
-    activeCourseIds.has(session.courseId)
-  );
+  // Get all sessions for active courses + unassigned sessions (blockers)
+  const relevantSessions = scheduledSessions.filter(session => {
+    if (!session.courseId) return true; // Include unassigned sessions
+    return activeCourseIds.has(session.courseId);
+  });
   
   // Calculate totals
   const scheduledHours = courses

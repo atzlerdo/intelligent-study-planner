@@ -133,7 +133,7 @@ export function CourseDialog({ open, onClose, onSave, course }: CourseDialogProp
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>{course ? 'Kurs bearbeiten' : 'Neuer Kurs'}</DialogTitle>
           <DialogDescription>

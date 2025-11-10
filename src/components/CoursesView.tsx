@@ -2,7 +2,7 @@ import { Plus, Pencil, Trash2, BookOpen, Clock, Calendar as CalendarIcon } from 
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import type { Course, ScheduledSession } from '../lib/types';
+import type { Course, ScheduledSession } from '../types';
 
 interface CoursesViewProps {
   courses: Course[];

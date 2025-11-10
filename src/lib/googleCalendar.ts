@@ -1,3 +1,5 @@
+// Note: Blocker functionality has been replaced by unassigned sessions (ScheduledSession with no courseId)
+// This stub function is kept for backwards compatibility but is no longer used
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ScheduledSession, Course } from '../types';
 
@@ -120,14 +122,17 @@ async function getOrCreateStudyCalendar(accessToken: string): Promise<string> {
 /**
  * Convert ScheduledSession to Google Calendar event
  */
-function sessionToCalendarEvent(session: ScheduledSession, course: Course): CalendarEvent {
+function sessionToCalendarEvent(session: ScheduledSession, course: Course | undefined): CalendarEvent {
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   
   // Handle multi-day sessions
   const endDate = session.endDate || session.date;
   
+  // For unassigned sessions (blockers), use generic title
+  const summary = course ? `📚 ${course.name}` : '� Study Session';
+  
   return {
-    summary: `📚 ${course.name}`,
+    summary,
     // Keep the description minimal: only user-provided notes (no extra metadata)
     description: session.notes || undefined,
     start: {
@@ -159,9 +164,10 @@ export async function syncSessionsToGoogleCalendar(
   try {
     const calendarId = await getOrCreateStudyCalendar(accessToken);
 
-    // Get existing events from our calendar
+    // Get ALL existing events from our calendar (including manually created ones)
+    // This is needed to properly delete events when sessions are removed from the app
     const existingEventsData = await fetchJson(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?privateExtendedProperty=appSource=intelligent-study-planner`,
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -170,10 +176,18 @@ export async function syncSessionsToGoogleCalendar(
     );
     const existingEvents = existingEventsData.items || [];
     const existingEventsBySessionId = new Map(
-      existingEvents.map((event: any) => [
-        event.extendedProperties?.private?.sessionId,
-        event,
-      ])
+      existingEvents
+        .filter((event: any) => event.extendedProperties?.private?.sessionId) // Only events with sessionId
+        .map((event: any) => [
+          event.extendedProperties?.private?.sessionId,
+          event,
+        ])
+    );
+    
+    // Also create a map by Google event ID for sessions imported from Google Calendar (gcal-* IDs)
+    // This allows us to find and update/delete events that don't have sessionId property yet
+    const existingEventsByGoogleId = new Map(
+      existingEvents.map((event: any) => [event.id, event])
     );
 
     let syncedCount = 0;
@@ -181,10 +195,21 @@ export async function syncSessionsToGoogleCalendar(
     // Sync each session
     for (const session of sessions) {
       const course = courses.find((c) => c.id === session.courseId);
-      if (!course) continue;
+      // Allow syncing unassigned sessions (blockers) - they don't need a course
+      if (session.courseId && !course) {
+        console.warn(`Session ${session.id} references unknown course ${session.courseId}, skipping`);
+        continue;
+      }
 
       const eventData = sessionToCalendarEvent(session, course);
-      const existingEvent = existingEventsBySessionId.get(session.id);
+      
+      // Try to find existing event by sessionId first, then by Google event ID
+      let existingEvent = existingEventsBySessionId.get(session.id);
+      if (!existingEvent && session.id.startsWith('gcal-')) {
+        // For gcal-* sessions, extract the Google event ID and look it up
+        const googleEventId = session.id.substring(5); // Remove 'gcal-' prefix
+        existingEvent = existingEventsByGoogleId.get(googleEventId);
+      }
 
       try {
         if (existingEvent) {
@@ -222,11 +247,33 @@ export async function syncSessionsToGoogleCalendar(
 
     // Delete events that no longer exist in our app
     const currentSessionIds = new Set(sessions.map((s) => s.id));
-    for (const [sessionId, event] of existingEventsBySessionId.entries()) {
-      if (sessionId && !currentSessionIds.has(sessionId as string)) {
+    
+    console.log(`🔍 Checking for events to delete. Current sessions in app: ${Array.from(currentSessionIds).join(', ')}`);
+    
+    // Check all events in Google Calendar
+    for (const event of existingEvents) {
+      const googleEventId = (event as any).id;
+      const sessionIdProperty = (event as any).extendedProperties?.private?.sessionId;
+      const gcalSessionId = `gcal-${googleEventId}`;
+      
+      // Determine if this event should exist based on our app's sessions
+      let shouldExist = false;
+      
+      if (sessionIdProperty) {
+        // Event has sessionId property - check if that session exists in app
+        shouldExist = currentSessionIds.has(sessionIdProperty);
+        console.log(`  Event ${googleEventId} has sessionId=${sessionIdProperty}, exists in app: ${shouldExist}`);
+      } else {
+        // Event doesn't have sessionId - check if gcal-* version exists in app
+        shouldExist = currentSessionIds.has(gcalSessionId);
+        console.log(`  Event ${googleEventId} has no sessionId, checking gcal-${googleEventId}, exists in app: ${shouldExist}`);
+      }
+      
+      // If event shouldn't exist, delete it
+      if (!shouldExist) {
         try {
           await fetchJson(
-            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${(event as any).id}`,
+            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${googleEventId}`,
             {
               method: 'DELETE',
               headers: {
@@ -234,8 +281,9 @@ export async function syncSessionsToGoogleCalendar(
               },
             }
           );
+          console.log(`🗑️ Successfully deleted event ${googleEventId} (session: ${sessionIdProperty || gcalSessionId}) from Google Calendar`);
         } catch (error) {
-          console.error(`Error deleting event for session ${sessionId}:`, error);
+          console.error(`❌ Error deleting event ${googleEventId}:`, error);
         }
       }
     }
@@ -260,9 +308,9 @@ export async function importEventsFromGoogleCalendar(
   try {
     const calendarId = await getOrCreateStudyCalendar(accessToken);
 
-    // Get all events from our study calendar
+    // Get ALL events from our study calendar (including manually created ones)
     const data = await fetchJson(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?privateExtendedProperty=appSource=intelligent-study-planner`,
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -274,8 +322,8 @@ export async function importEventsFromGoogleCalendar(
 
     // Convert calendar events back to ScheduledSessions format, including last updated time
     const importedSessions: ScheduledSession[] = events
-  .filter((event: unknown) => (event as { extendedProperties?: { private?: { sessionId?: string } } }).extendedProperties?.private?.sessionId)
-  .map((event: { extendedProperties: { private: { sessionId: string; courseId: string } }; start: { dateTime: string }; end: { dateTime: string }; description?: string; updated?: string }): ScheduledSession => {
+  .filter((event: any) => event.start?.dateTime && event.end?.dateTime) // Only time-based events (not all-day)
+  .map((event: any): ScheduledSession => {
         const startDateTime = new Date(event.start.dateTime);
         const endDateTime = new Date(event.end.dateTime);
 
@@ -295,9 +343,15 @@ export async function importEventsFromGoogleCalendar(
         // Google Calendar event 'updated' field is RFC3339 timestamp
         const lastModified = event.updated ? new Date(event.updated).getTime() : 0;
 
+        // Use existing sessionId if present, otherwise generate new one from Google event ID
+        const sessionId = event.extendedProperties?.private?.sessionId || `gcal-${event.id}`;
+        
+        // Get courseId if present (undefined for manually created events = unassigned sessions)
+        const courseId = event.extendedProperties?.private?.courseId;
+
         return {
-          id: event.extendedProperties.private.sessionId,
-          courseId: event.extendedProperties.private.courseId,
+          id: sessionId,
+          courseId: courseId, // Optional: undefined for unassigned sessions
           studyBlockId: '', // Will need to be mapped
           date: startDate,
           endDate: startDate !== endDate ? endDate : undefined,
@@ -308,6 +362,8 @@ export async function importEventsFromGoogleCalendar(
           completionPercentage: 0,
           notes: event.description || '',
           lastModified,
+          googleEventId: event.id, // Store Google event ID for future updates
+          googleCalendarId: calendarId,
         };
       });
 
@@ -361,13 +417,35 @@ export async function performTwoWaySync(
       JSON.parse(localStorage.getItem('googleCalendarSyncedIds') || '[]')
     );
 
+    // Step 2b: Get recently deleted IDs (for grace period to prevent re-sync due to API delays)
+    const recentlyDeletedIds = new Set<string>();
+    try {
+      const stored = localStorage.getItem('googleCalendarRecentlyDeleted');
+      if (stored) {
+        const deletedMap: Record<string, number> = JSON.parse(stored);
+        const now = Date.now();
+        const FIVE_MINUTES = 5 * 60 * 1000;
+        
+        // Only keep non-expired deletions
+        Object.entries(deletedMap).forEach(([id, timestamp]) => {
+          if (now - timestamp <= FIVE_MINUTES) {
+            recentlyDeletedIds.add(id);
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to load recently deleted IDs:', e);
+    }
+
     console.log('🔄 Two-way sync starting:', {
       localSessions: localSessions.length,
       localSessionIds: localSessions.map(s => s.id),
       remoteSessions: remoteSessions.length,
       remoteSessionIds: remoteSessions.map(s => s.id),
       previouslySyncedCount: previouslySyncedIds.size,
-      previouslySyncedIds: Array.from(previouslySyncedIds)
+      previouslySyncedIds: Array.from(previouslySyncedIds),
+      recentlyDeletedCount: recentlyDeletedIds.size,
+      recentlyDeletedIds: Array.from(recentlyDeletedIds)
     });
 
     // Step 3: Build the merged result
@@ -390,9 +468,21 @@ export async function performTwoWaySync(
           console.log(`✏️ Session ${id} exists in both, using ${remoteMod > localMod ? 'remote' : 'local'} version (remote: ${new Date(remoteMod).toISOString()}, local: ${new Date(localMod).toISOString()})`);
           mergedSessions.push({ ...chosen });
         } else {
-          // Only in Google Calendar: add it (created in Google)
-          console.log(`➕ Session ${id} only in Google Calendar, adding to app`);
-          mergedSessions.push({ ...remote });
+          // Only in Google Calendar, not locally
+          
+          if (recentlyDeletedIds.has(id)) {
+            // Recently deleted locally → ignore for grace period (API propagation delay)
+            console.log(`⏳ Session ${id} was recently deleted locally, ignoring (grace period for API sync)`);
+            // Don't include it - deletion will propagate to Google Calendar
+          } else if (previouslySyncedIds.has(id)) {
+            // Was previously synced but now missing locally → deleted locally, should be deleted from Google
+            console.log(`🗑️ Session ${id} was deleted locally (in previouslySyncedIds but not in app state), will be removed from Google Calendar`);
+            // Don't include it in merged sessions - this will trigger deletion in syncSessionsToGoogleCalendar
+          } else {
+            // Never synced before → new session created in Google Calendar
+            console.log(`➕ Session ${id} only in Google Calendar, adding to app`);
+            mergedSessions.push({ ...remote });
+          }
         }
       } else if (local) {
         // Only exists locally
@@ -431,8 +521,43 @@ export async function performTwoWaySync(
 
     // Step 6: Track all merged session IDs as "synced" (after successful push)
     const syncedIds = mergedSessions.map(s => s.id);
+    
+    // Also track which sessions were deleted (for grace period to prevent re-sync)
+    // Keep previously synced IDs that are NOT in mergedSessions as "recently deleted"
+    const deletedIds = Array.from(previouslySyncedIds).filter(id => !syncedIds.includes(id));
+    
     try {
       localStorage.setItem('googleCalendarSyncedIds', JSON.stringify(syncedIds));
+      
+      // Store deleted IDs with timestamp (expire after 5 minutes to handle API delays)
+      if (deletedIds.length > 0) {
+        const recentlyDeleted: Record<string, number> = {};
+        try {
+          const stored = localStorage.getItem('googleCalendarRecentlyDeleted');
+          if (stored) {
+            Object.assign(recentlyDeleted, JSON.parse(stored));
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+        
+        const now = Date.now();
+        const FIVE_MINUTES = 5 * 60 * 1000;
+        
+        // Add new deletions
+        deletedIds.forEach(id => {
+          recentlyDeleted[id] = now;
+        });
+        
+        // Clean up expired deletions
+        Object.keys(recentlyDeleted).forEach(id => {
+          if (now - recentlyDeleted[id] > FIVE_MINUTES) {
+            delete recentlyDeleted[id];
+          }
+        });
+        
+        localStorage.setItem('googleCalendarRecentlyDeleted', JSON.stringify(recentlyDeleted));
+      }
     } catch (e) {
       console.error('Failed to persist synced IDs:', e);
     }

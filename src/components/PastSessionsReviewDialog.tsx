@@ -2,7 +2,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Button } from './ui/button';
 import { AlertCircle, Clock } from 'lucide-react';
 import { Badge } from './ui/badge';
-import type { ScheduledSession, Course } from '../lib/types';
+import type { ScheduledSession, Course } from '../types';
 import { ScrollArea } from './ui/scroll-area';
 
 interface PastSessionsReviewDialogProps {
@@ -24,11 +24,13 @@ export function PastSessionsReviewDialog({
     return null;
   }
 
-  const getCourseName = (courseId: string): string => {
+  const getCourseName = (courseId?: string): string => {
+    if (!courseId) return 'Unassigned Session';
     return courses.find(c => c.id === courseId)?.name || 'Kurs';
   };
 
-  const getCourseECTS = (courseId: string): number => {
+  const getCourseECTS = (courseId?: string): number => {
+    if (!courseId) return 0;
     return courses.find(c => c.id === courseId)?.ects || 0;
   };
 

@@ -38,7 +38,7 @@ export function OnboardingDialog({ open, onComplete }: OnboardingDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" onPointerDownOutside={(e) => e.preventDefault()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" onPointerDownOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <div className="flex justify-center mb-4">
             <div className="p-4 bg-blue-100 rounded-full">

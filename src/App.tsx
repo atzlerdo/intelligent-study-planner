@@ -869,18 +869,34 @@ function App() {
   };
 
   const handleEditSession = (session: ScheduledSession) => {
+    console.log('🖱️ Clicked session:', { 
+      id: session.id, 
+      courseId: session.courseId, 
+      date: session.date, 
+      time: `${session.startTime}-${session.endTime}`,
+      completed: session.completed 
+    });
+    
     // Check if session has ended (comparing end time) in local timezone
     const [year, month, day] = session.date.split('-').map(Number);
     const [endHour, endMinute] = session.endTime.split(':').map(Number);
     const sessionEndDate = new Date(year, month - 1, day, endHour, endMinute, 0, 0);
     const now = new Date();
     
+    console.log('📅 Session time check:', { 
+      sessionEndDate: sessionEndDate.toISOString(), 
+      now: now.toISOString(), 
+      isPast: sessionEndDate < now 
+    });
+    
     if (sessionEndDate < now && !session.completed) {
       // Past session - first ask if attended
+      console.log('👉 Opening attendance dialog (past session)');
       setFeedbackSession(session);
       setShowAttendanceDialog(true);
     } else {
       // Future or completed session - show edit dialog
+      console.log('👉 Opening edit dialog (future/completed session)');
       setCreateSessionData(null); // Clear create session data to avoid showing both dialogs
       setEditingSession(session);
       setShowSessionDialog(true);
@@ -1071,6 +1087,9 @@ function App() {
     const scheduledHoursByCourse = new Map<string, number>();
     
     for (const session of finalSessions) {
+      // Skip unassigned sessions (blockers) - they don't count toward course hours
+      if (!session.courseId) continue;
+      
       const hours = session.durationMinutes / 60;
       const current = scheduledHoursByCourse.get(session.courseId) || 0;
       scheduledHoursByCourse.set(session.courseId, current + hours);
@@ -1256,7 +1275,8 @@ function App() {
         onPreviewChange={setPreviewSession}
       />
       
-      <div className="flex-1 overflow-hidden pb-20 lg:pb-0">
+  {/* TODO: Pass blockers to Dashboard/CalendarView for rendering as unassigned sessions */}
+  <div className="flex-1 overflow-hidden pb-20 lg:pb-0">
         {currentView === 'dashboard' && (
           <Dashboard 
             courses={courses}
@@ -1272,6 +1292,7 @@ function App() {
             autoSyncTrigger={autoSyncTrigger}
             previewSession={previewSession}
             editingSessionId={editingSession?.id}
+            isDialogOpen={showSessionDialog}
           />
         )}
 

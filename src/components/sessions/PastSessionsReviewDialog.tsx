@@ -24,11 +24,13 @@ export function PastSessionsReviewDialog({
     return null;
   }
 
-  const getCourseName = (courseId: string): string => {
+  const getCourseName = (courseId?: string): string => {
+    if (!courseId) return 'Unassigned Session';
     return courses.find(c => c.id === courseId)?.name || 'Kurs';
   };
 
-  const getCourseECTS = (courseId: string): number => {
+  const getCourseECTS = (courseId?: string): number => {
+    if (!courseId) return 0;
     return courses.find(c => c.id === courseId)?.ects || 0;
   };
 
@@ -39,7 +41,7 @@ export function PastSessionsReviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[90vh] flex flex-col">
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-red-600" />

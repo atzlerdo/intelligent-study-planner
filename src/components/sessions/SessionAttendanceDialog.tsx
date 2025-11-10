@@ -31,7 +31,7 @@ export function SessionAttendanceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
           <DialogTitle>Session-Teilnahme</DialogTitle>
           <DialogDescription>

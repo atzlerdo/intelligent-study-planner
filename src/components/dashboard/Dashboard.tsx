@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import type { Course, StudyProgram, ScheduledSession } from '../../types';
 import { WeekCalendar } from '../WeekCalendar';
 
+
 interface DashboardProps {
   courses: Course[];
   studyProgram: StudyProgram;
@@ -20,22 +21,31 @@ interface DashboardProps {
   autoSyncTrigger?: number;
   previewSession?: ScheduledSession | null;
   editingSessionId?: string | null;
+  isDialogOpen?: boolean;
 }
 
-export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId }: DashboardProps) {
+export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId, isDialogOpen }: DashboardProps) {
   // Filter for active courses only
   const activeCourses = courses.filter(c => c.status === 'active');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
   
-  // Get all sessions for active courses
-  const relevantSessions = scheduledSessions.filter(session => 
-    activeCourseIds.has(session.courseId)
-  );
+  // Get all sessions for active courses + unassigned sessions (blockers)
+  const relevantSessions = scheduledSessions.filter(session => {
+    if (!session.courseId) return true; // Include unassigned sessions
+    return activeCourseIds.has(session.courseId);
+  });
   
   // Calculate totals
-  const scheduledHours = courses
+  const coursesScheduledHours = courses
     .filter(c => c.status === 'active' || c.status === 'planned')
     .reduce((sum, c) => sum + c.scheduledHours, 0);
+  
+  // Add unassigned session hours to the total
+  const unassignedHours = scheduledSessions
+    .filter(s => !s.courseId)
+    .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
+  
+  const scheduledHours = coursesScheduledHours + unassignedHours;
 
   return (
     <div className="h-full overflow-hidden lg:overflow-hidden overflow-y-auto p-4">
@@ -323,6 +333,7 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
               autoSyncTrigger={autoSyncTrigger}
               previewSession={previewSession}
               editingSessionId={editingSessionId}
+              isDialogOpen={isDialogOpen}
             />
           </div>
         </div>

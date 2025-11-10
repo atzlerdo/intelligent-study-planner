@@ -41,7 +41,7 @@ export interface StudyBlock {
 
 export interface ScheduledSession {
   id: string;
-  courseId: string;
+  courseId?: string; // Optional: undefined for unassigned sessions (blockers)
   studyBlockId: string;
   date: string;
   startTime: string;
@@ -52,6 +52,8 @@ export interface ScheduledSession {
   completionPercentage: number;
   notes?: string;
   lastModified?: number; // Unix ms timestamp for merge logic
+  googleEventId?: string; // Link to Google Calendar event
+  googleCalendarId?: string; // Which calendar this event is in
 }
 
 export interface Session {

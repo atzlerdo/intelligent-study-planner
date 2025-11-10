@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from './ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -56,6 +56,9 @@ interface SessionDialogProps {
 }
 
 export function SessionDialog({ open, onClose, onSave, onDelete, session, courses, sessions = [], onCreateCourse, initialDate, initialStartTime, initialEndTime, onPreviewChange }: SessionDialogProps) {
+  // Debug logging
+  console.log('SessionDialog render:', { session: session?.id, hasOnDelete: !!onDelete, sessionCourseId: session?.courseId });
+  
   const [courseId, setCourseId] = useState('');
   const [date, setDate] = useState(''); // ISO format for internal use
   const [endDate, setEndDate] = useState(''); // ISO format for internal use
@@ -251,7 +254,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
 
   useEffect(() => {
     if (session) {
-      setCourseId(session.courseId);
+      setCourseId(session.courseId || ''); // Handle unassigned sessions
       const sessionDate = session.date;
       const sessionEndDate = session.endDate || session.date;
       setDate(sessionDate);
@@ -262,7 +265,8 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       setEndTime(session.endTime);
       setRecurring(false);
     } else {
-      setCourseId(availableCourses[0]?.id || '');
+      // Default to empty (unassigned session)
+      setCourseId('');
       
       // Use initial values if provided (from calendar drag)
       if (initialDate) {
@@ -298,7 +302,8 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   useEffect(() => {
     if (!open || !onPreviewChange) return;
     
-    if (!courseId || !date || !startTime || !endTime) {
+    // Allow preview for unassigned sessions (courseId can be empty)
+    if (!date || !startTime || !endTime) {
       onPreviewChange(null);
       return;
     }
@@ -343,7 +348,8 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   }, [startTime, endTime]);
 
   const handleSubmit = () => {
-    if (!courseId || !date || !endDate) return;
+    // Allow unassigned sessions (courseId can be empty)
+    if (!date || !endDate) return;
 
     const duration = calculateDuration(startTime, endTime, date, endDate);
     
@@ -365,7 +371,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
     });
 
     onSave({
-      courseId,
+      courseId: courseId || undefined, // Convert empty string to undefined for unassigned sessions
       studyBlockId: 'manual',
       date,
       endDate: endDate !== date ? endDate : undefined, // Only save endDate if different from date
@@ -381,7 +387,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   };
 
   const handleDelete = () => {
-    if (session && onDelete && confirm('Möchtest du diese Session wirklich löschen?')) {
+    if (session && onDelete) {
       onDelete(session.id);
       // Don't call onClose() here - let the parent component handle closing
     }
@@ -390,12 +396,13 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   const duration = calculateDuration(startTime, endTime, date, endDate);
   const durationHours = Math.round(duration / 60 * 10) / 10;
   
-  // Check if all required fields are filled
-  const isFormValid = courseId && date && endDate && startTime && endTime && duration > 0;
+  // Check if all required fields are filled (courseId is optional for unassigned sessions)
+  const isFormValid = date && endDate && startTime && endTime && duration > 0;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden p-0">
+        <div className="overflow-y-auto overflow-x-hidden flex-1 px-4 sm:px-6 pt-4 sm:pt-6">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle>{session ? 'Session bearbeiten' : 'Neue Session'}</DialogTitle>
@@ -420,11 +427,12 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
         <div className="space-y-4 py-4 min-w-0 w-full">
           <div className="space-y-2 w-full">
             <Label htmlFor="course">Kurs</Label>
-            <Select value={courseId} onValueChange={setCourseId}>
+            <Select value={courseId || "unassigned"} onValueChange={(value) => setCourseId(value === "unassigned" ? "" : value)}>
               <SelectTrigger id="course" className="w-full">
                 <SelectValue placeholder="Kurs wählen" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="unassigned">Nicht zugewiesen</SelectItem>
                 {availableCourses.map(course => {
                   const hasSession = coursesWithSessions.has(course.id);
                   return (
@@ -770,20 +778,24 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
             </div>
           )}
         </div>
-
-        <DialogFooter className="flex items-center justify-between">
-          <div>
-            {session && onDelete && (
-              <Button variant="destructive" onClick={handleDelete} size="sm">
-                <Trash2 className="w-4 h-4 mr-2" />
-                Löschen
-              </Button>
-            )}
-          </div>
-          <Button onClick={handleSubmit} disabled={!isFormValid} size="lg" className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:bg-gray-400">
+        </div>
+        {/* Footer - OUTSIDE scrollable area */}
+        <div className="flex flex-row justify-end items-center w-full gap-3 border-t border-gray-200 bg-white px-4 sm:px-6 py-4 shrink-0">
+          {session && onDelete && (
+            <Button 
+              variant="destructive" 
+              onClick={handleDelete} 
+              size="lg" 
+              className="shrink-0 bg-red-600 hover:bg-red-700 text-white"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Löschen
+            </Button>
+          )}
+          <Button onClick={handleSubmit} disabled={!isFormValid} size="lg" className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:bg-gray-400 shrink-0">
             {session ? 'Speichern' : 'Erstellen'}
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

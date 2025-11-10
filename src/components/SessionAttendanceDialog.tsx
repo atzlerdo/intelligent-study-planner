@@ -1,6 +1,6 @@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
-import type { ScheduledSession, Course } from '../lib/types';
+import type { ScheduledSession, Course } from '../types';
 import { Check, X } from 'lucide-react';
 
 interface SessionAttendanceDialogProps {

@@ -25,9 +25,10 @@ interface WeekCalendarProps {
   // Preview session for live editing
   previewSession?: ScheduledSession | null;
   editingSessionId?: string | null; // ID of session being edited (to hide original)
+  isDialogOpen?: boolean; // Whether any dialog is open (to prevent drag gestures)
 }
 
-export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId }: WeekCalendarProps) {
+export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId, isDialogOpen }: WeekCalendarProps) {
   const isMobile = useIsMobile();
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -66,6 +67,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
   const [draggedSessionSize, setDraggedSessionSize] = useState<{ width: number; height: number } | null>(null);
   const [isInteractingWithSession, setIsInteractingWithSession] = useState(false);
+  
+  // Track when dialog was last closed to prevent accidental week navigation
+  const lastDialogCloseTime = useRef<number>(0);
+  const isDialogRecentlyClosed = () => Date.now() - lastDialogCloseTime.current < 300; // 300ms cooldown
 
   // Update current time every minute
   useEffect(() => {
@@ -74,6 +79,14 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+  
+  // Track when dialog closes to prevent accidental drag navigation
+  useEffect(() => {
+    if (!isDialogOpen) {
+      // Dialog just closed, record the time
+      lastDialogCloseTime.current = Date.now();
+    }
+  }, [isDialogOpen]);
 
   // Global pointer move listener for smooth dragging
   useEffect(() => {
@@ -142,6 +155,13 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
 
   // Check if we're viewing the current week
   const isCurrentWeek = currentWeekOffset === 0;
+
+  // Reset drag position when dialog opens to prevent week jumping
+  useEffect(() => {
+    if (isDialogOpen) {
+      x.set(0);
+    }
+  }, [isDialogOpen, x]);
 
   // Auto-scroll to current time on mount and week change with 2-hour buffer
   useEffect(() => {
@@ -222,8 +242,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     const uniqueSessions = Array.from(sessionById.values());
     
     const filteredSessions = uniqueSessions.filter(s => {
-      // Hide the session being edited (original will be replaced by preview)
-      if (editingSessionId && s.id === editingSessionId) return false;
+      // Keep the session visible even when editing (don't hide the original)
+      // The preview system will handle showing changes if needed
       
       // Check if session starts on this day
       if (s.date === dateStr) return true;
@@ -280,11 +300,17 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     return date.toDateString() === today.toDateString();
   };
 
-  const getCourseName = (courseId: string): string => {
+  const getCourseName = (courseId?: string): string => {
+    if (!courseId) return 'Unassigned Session'; // Blocker/unassigned session
     return courses.find(c => c.id === courseId)?.name || 'Kurs';
   };
 
   const getSessionColor = (session: ScheduledSession): string => {
+    // Unassigned sessions (blockers) - neutral gray styling
+    if (!session.courseId) {
+      return 'bg-gray-100 border-gray-400 text-gray-700 shadow-sm';
+    }
+    
     if (session.completed) {
       // Check if this was attended (has completionPercentage > 0) or not attended
       if (session.completionPercentage && session.completionPercentage > 0) {
@@ -349,12 +375,28 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   };
 
   const handleDragEnd = (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
-    const threshold = 100;
-    if (info.offset.x > threshold) {
-      setCurrentWeekOffset(currentWeekOffset - 1);
-    } else if (info.offset.x < -threshold) {
-      setCurrentWeekOffset(currentWeekOffset + 1);
+    // Don't change week if drag was disabled (dialog open, session interaction, etc.)
+    if (draggedSession || isDraggingNew || isInteractingWithSession || isDialogOpen || isDialogRecentlyClosed()) {
+      animate(x, 0, { type: 'spring', stiffness: 300, damping: 30 });
+      return;
     }
+    
+    // Only change week if there was actual dragging motion (velocity > threshold)
+    // This prevents accidental week changes from simple clicks
+    const velocityThreshold = 50; // pixels/second
+    const distanceThreshold = 100; // pixels
+    const hasSignificantVelocity = Math.abs(info.velocity.x) > velocityThreshold;
+    const hasSignificantDistance = Math.abs(info.offset.x) > distanceThreshold;
+    
+    // Require either significant velocity OR distance to change weeks
+    if (hasSignificantVelocity || hasSignificantDistance) {
+      if (info.offset.x > distanceThreshold) {
+        setCurrentWeekOffset(currentWeekOffset - 1);
+      } else if (info.offset.x < -distanceThreshold) {
+        setCurrentWeekOffset(currentWeekOffset + 1);
+      }
+    }
+    
     animate(x, 0, { type: 'spring', stiffness: 300, damping: 30 });
   };
 
@@ -802,7 +844,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                   </span>
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Google Kalender Synchronisation</DialogTitle>
                 </DialogHeader>
@@ -825,11 +867,12 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
           className="h-full max-h-[360px] lg:max-h-none overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent"
           style={{ 
             cursor: isDraggingNew ? 'crosshair' : 'default',
-            WebkitOverflowScrolling: 'touch'
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y' // Only allow vertical scrolling, prevent horizontal swipe
           }}
         >
           <motion.div
-            drag={!draggedSession && !isDraggingNew ? "x" : false}
+            drag={!draggedSession && !isDraggingNew && !isInteractingWithSession && !isDialogOpen && !isDialogRecentlyClosed() ? "x" : false}
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={0.2}
             onDragEnd={handleDragEnd}
@@ -1095,13 +1138,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                           const pos = calculateSessionPosition(session, date);
                           const isDragging = draggedSession?.id === session.id;
                           const isPreview = previewSession && session.id === previewSession.id;
-                          
-                          // Check if session has valid endTime
+                          // ...existing session rendering logic...
                           let needsEvaluation = false;
                           if (session.endTime && !session.completed) {
                             try {
-                              // Create datetime for session end in local timezone
-                              // Use endDate if available (for multi-day sessions), otherwise use date
                               const endDateStr = session.endDate || session.date;
                               const [year, month, day] = endDateStr.split('-').map(Number);
                               const [endHour, endMinute] = session.endTime.split(':').map(Number);
@@ -1112,26 +1152,22 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                               console.error('Error parsing session time:', session);
                             }
                           }
-                          
-                          // Create unique key for multi-day sessions (includes date)
-                          const dateStr = formatDateToLocal(date);
                           const keyPrefix = isPreview ? 'preview' : 'session';
+                          const dateStr = formatDateToLocal(date);
                           const uniqueKey = `${keyPrefix}-${session.id}-${dateStr}`;
-                          
                           return (
                             <div
                               key={uniqueKey}
                               className={`rounded-lg border px-2 py-1.5 ${isPreview ? 'pointer-events-none' : 'cursor-pointer hover:shadow-lg'} transition-all ${getSessionColor(session)}`}
                               style={{
-                                // Normal positioning - make semi-transparent if dragging or preview
                                 position: 'absolute',
                                 left: '4px',
                                 right: '4px',
                                 top: `${pos.top}px`,
                                 height: `${pos.height}px`,
-                                zIndex: isPreview ? 20 : 10, // Preview on top
+                                zIndex: isPreview ? 20 : 10,
                                 touchAction: 'none',
-                                opacity: isDragging || isPreview ? 0.5 : 1, // Semi-transparent during drag or preview
+                                opacity: isDragging || isPreview ? 0.5 : 1,
                               }}
                               onPointerDown={(e) => handleSessionPointerDown(session, date, e)}
                               onPointerMove={handleSessionPointerMove}
@@ -1139,14 +1175,12 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                               onPointerCancel={handleSessionPointerCancel}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                // Only trigger click if we're not dragging
                                 if (!draggedSession) {
                                   onSessionClick(session);
                                 }
                               }}
                             >
                               <div className="text-xs leading-tight font-medium break-words">{getCourseName(session.courseId)}</div>
-                              {/* Time range hidden per request */}
                               {needsEvaluation && (
                                 <div className="text-[10px] text-red-600 mt-0.5">Bewerten</div>
                               )}
@@ -1235,7 +1269,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
             </span>
           </Button>
         </DialogTrigger>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Google Kalender Synchronisation</DialogTitle>
           </DialogHeader>

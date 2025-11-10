@@ -4,8 +4,8 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import type { Course } from '../lib/types';
-import type { Milestone } from '../lib/types';
+import type { Course } from '../types';
+import type { Milestone } from '../types';
 import { Plus, X } from 'lucide-react';
 
 // Helper functions for date formatting

@@ -54,11 +54,14 @@ export function CalendarView({
       .sort((a, b) => a.startTime.localeCompare(b.startTime));
   };
 
-  const getCourseName = (courseId: string): string => {
+  const getCourseName = (courseId?: string): string => {
+    if (!courseId) return 'Unassigned Session'; // Blocker/unassigned session
     return courses.find(c => c.id === courseId)?.name || 'Kurs';
   };
 
-  const getCourseColor = (courseId: string): string => {
+  const getCourseColor = (courseId?: string): string => {
+    if (!courseId) return 'bg-gray-100 text-gray-700 border-gray-300'; // Unassigned sessions
+    
     const course = courses.find(c => c.id === courseId);
     if (!course) return 'bg-gray-100 text-gray-900';
     
