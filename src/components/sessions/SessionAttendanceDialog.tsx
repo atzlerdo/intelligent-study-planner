@@ -66,7 +66,7 @@ export function SessionAttendanceDialog({
                 onClick={onAttended}
                 variant="default"
                 size="lg"
-                className="flex-1 max-w-[150px] h-20 flex flex-col gap-2"
+                className="flex-1 max-w-[150px] h-20 flex flex-col gap-2 bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md"
               >
                 <Check className="w-8 h-8" />
                 <span>Ja</span>

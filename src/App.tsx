@@ -30,6 +30,13 @@ function App() {
     hoursPerECTS: 27.5,
   });
 
+  // Trigger sync when dashboard view is shown
+  useEffect(() => {
+    if (currentView === 'dashboard') {
+      setAutoSyncTrigger(Date.now());
+    }
+  }, [currentView]);
+
   // Check if onboarding is needed on first load
   useEffect(() => {
     const hasOnboarded = localStorage.getItem('hasOnboarded');
@@ -673,6 +680,14 @@ function App() {
   const [editingSession, setEditingSession] = useState<ScheduledSession | undefined>();
   const [feedbackSession, setFeedbackSession] = useState<ScheduledSession | null>(null);
   const [originalSessionBeforeMove, setOriginalSessionBeforeMove] = useState<ScheduledSession | null>(null);
+  const [previewSession, setPreviewSession] = useState<ScheduledSession | null>(null);
+
+  // Clear preview session when navigating away or closing dialog
+  useEffect(() => {
+    if (!showSessionDialog) {
+      setPreviewSession(null);
+    }
+  }, [showSessionDialog]);
 
   // Calculate weekly capacity
   const weeklyCapacity = calculateWeeklyAvailableMinutes(studyBlocks);
@@ -1028,11 +1043,46 @@ function App() {
 
   // Handle sessions imported from Google Calendar
   const handleSessionsImported = (importedSessions: ScheduledSession[]) => {
-    console.log('📥 Importing sessions from Google Calendar:', importedSessions.length);
+    console.log('📥 App: Importing sessions from Google Calendar:', importedSessions.length);
     
-    // Replace all sessions with the merged ones from the sync
-    // The sync already performed the merge based on lastModified timestamps
-    setScheduledSessions(importedSessions);
+    // Trust the sync function completely - it already performed the correct merge
+    // including handling new local sessions, deletions, and updates
+    // Simply replace all sessions with the merged result
+    console.log('� App: Replacing all sessions with synced result');
+    // Deduplicate sessions before setting state
+    const ids = importedSessions.map(s => s.id);
+    const hasDuplicates = ids.some((id, index) => ids.indexOf(id) !== index);
+    let finalSessions = importedSessions;
+    
+    if (hasDuplicates) {
+      console.warn('Duplicate session IDs detected, deduplicating...');
+      const sessionById = new Map<string, ScheduledSession>();
+      for (const s of importedSessions) {
+        const existing = sessionById.get(s.id);
+        if (!existing || (s.lastModified || 0) > (existing.lastModified || 0)) {
+          sessionById.set(s.id, s);
+        }
+      }
+      finalSessions = Array.from(sessionById.values());
+    }
+    
+    // Recalculate scheduledHours for all courses based on the synced sessions
+    console.log('🔄 Recalculating scheduled hours for all courses...');
+    const scheduledHoursByCourse = new Map<string, number>();
+    
+    for (const session of finalSessions) {
+      const hours = session.durationMinutes / 60;
+      const current = scheduledHoursByCourse.get(session.courseId) || 0;
+      scheduledHoursByCourse.set(session.courseId, current + hours);
+    }
+    
+    // Update courses with recalculated scheduled hours
+    setCourses(prevCourses => prevCourses.map(course => ({
+      ...course,
+      scheduledHours: scheduledHoursByCourse.get(course.id) || 0
+    })));
+    
+    setScheduledSessions(finalSessions);
   };
 
   // Drag to create session from calendar
@@ -1090,16 +1140,24 @@ function App() {
             <h1 className="text-gray-900 text-2xl">Intelligent Study Planner</h1>
             
             {/* Desktop Navigation */}
-            <nav className="flex items-center gap-2">
+            <nav className="flex items-center gap-3">
               <Button
-                variant={currentView === 'dashboard' ? 'default' : 'ghost'}
+                variant={currentView === 'dashboard' ? 'default' : 'outline'}
+                size="lg"
                 onClick={() => setCurrentView('dashboard')}
+                className={currentView === 'dashboard' 
+                  ? 'bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md' 
+                  : 'font-semibold'}
               >
                 Start
               </Button>
               <Button
-                variant={currentView === 'courses' ? 'default' : 'ghost'}
+                variant={currentView === 'courses' ? 'default' : 'outline'}
+                size="lg"
                 onClick={() => setCurrentView('courses')}
+                className={currentView === 'courses' 
+                  ? 'bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md' 
+                  : 'font-semibold'}
               >
                 Kurse
               </Button>
@@ -1184,6 +1242,7 @@ function App() {
           setShowSessionDialog(false);
           setEditingSession(undefined);
           setCreateSessionData(null);
+          setPreviewSession(null);
         }}
         onSave={handleSaveSession}
         onDelete={handleDeleteSession}
@@ -1194,6 +1253,7 @@ function App() {
         initialDate={createSessionData?.date}
         initialStartTime={createSessionData?.startTime}
         initialEndTime={createSessionData?.endTime}
+        onPreviewChange={setPreviewSession}
       />
       
       <div className="flex-1 overflow-hidden pb-20 lg:pb-0">
@@ -1210,6 +1270,8 @@ function App() {
             onSessionMove={handleSessionMove}
             onSessionsImported={handleSessionsImported}
             autoSyncTrigger={autoSyncTrigger}
+            previewSession={previewSession}
+            editingSessionId={editingSession?.id}
           />
         )}
 

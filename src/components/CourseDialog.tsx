@@ -287,7 +287,7 @@ export function CourseDialog({ open, onClose, onSave, course }: CourseDialogProp
           <Button variant="outline" onClick={onClose}>
             Abbrechen
           </Button>
-          <Button onClick={handleSubmit} disabled={!name.trim()}>
+          <Button onClick={handleSubmit} disabled={!name.trim()} size="lg" className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:bg-gray-400">
             {course ? 'Speichern' : 'Erstellen'}
           </Button>
         </DialogFooter>

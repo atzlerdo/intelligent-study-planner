@@ -5,7 +5,6 @@ import { Button } from '../ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import type { Course, StudyProgram, ScheduledSession } from '../../types';
 import { WeekCalendar } from '../WeekCalendar';
-import { CalendarSync } from '../CalendarSync';
 
 interface DashboardProps {
   courses: Course[];
@@ -19,9 +18,11 @@ interface DashboardProps {
   onSessionMove?: (session: ScheduledSession, newDate: string, newStartTime: string, newEndTime: string) => void;
   onSessionsImported?: (sessions: ScheduledSession[]) => void;
   autoSyncTrigger?: number;
+  previewSession?: ScheduledSession | null;
+  editingSessionId?: string | null;
 }
 
-export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger }: DashboardProps) {
+export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId }: DashboardProps) {
   // Filter for active courses only
   const activeCourses = courses.filter(c => c.status === 'active');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
@@ -308,14 +309,6 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                 </CardContent>
               </Card>
             )}
-
-            {/* Google Calendar Sync Card */}
-            <CalendarSync 
-              sessions={scheduledSessions}
-              courses={courses}
-              onSessionsImported={onSessionsImported}
-              autoSyncTrigger={autoSyncTrigger}
-            />
           </div>
 
           {/* Right Column - Week Calendar (70%) */}
@@ -326,6 +319,10 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
               onSessionClick={onSessionClick}
               onCreateSession={onCreateSession}
               onSessionMove={onSessionMove}
+              onSessionsImported={onSessionsImported}
+              autoSyncTrigger={autoSyncTrigger}
+              previewSession={previewSession}
+              editingSessionId={editingSessionId}
             />
           </div>
         </div>

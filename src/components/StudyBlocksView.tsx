@@ -71,7 +71,7 @@ export function StudyBlocksView({
             <p className="text-sm text-gray-600 mb-4">
               Erstelle wöchentliche Zeitfenster für dein Studium.
             </p>
-            <Button onClick={onAddBlock}>
+            <Button onClick={onAddBlock} size="lg" className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md">
               <Plus className="w-4 h-4 mr-2" />
               Block erstellen
             </Button>

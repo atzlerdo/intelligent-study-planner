@@ -12,17 +12,52 @@ interface CalendarSyncProps {
   courses: Course[];
   onSessionsImported?: (sessions: ScheduledSession[]) => void;
   autoSyncTrigger?: number; // Timestamp to trigger auto-sync
+  onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void; // notify parent for icon indicator
 }
 
-export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTrigger }: CalendarSyncProps) {
-  const [isConnected, setIsConnected] = useState(false);
+export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTrigger, onStateChange }: CalendarSyncProps) {
+  // Persist connection state in localStorage
+  const [accessToken, setAccessToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('googleCalendarAccessToken');
+    } catch {
+      return null;
+    }
+  });
+  const [isConnected, setIsConnected] = useState(() => !!accessToken);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(() => {
+    try {
+      const saved = localStorage.getItem('googleCalendarLastSync');
+      return saved ? new Date(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [syncStatus, setSyncStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
   }>({ type: null, message: '' });
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+
+  // Notify parent about state changes for icon indicator
+  useEffect(() => {
+    if (onStateChange) {
+      onStateChange({ isConnected, isSyncing });
+    }
+  }, [isConnected, isSyncing, onStateChange]);
+
+  // Persist token changes
+  useEffect(() => {
+    try {
+      if (accessToken) {
+        localStorage.setItem('googleCalendarAccessToken', accessToken);
+      } else {
+        localStorage.removeItem('googleCalendarAccessToken');
+      }
+    } catch (e) {
+      console.error('Failed to persist access token:', e);
+    }
+  }, [accessToken]);
 
   // Auto-sync when autoSyncTrigger changes (session added/edited/deleted)
   useEffect(() => {
@@ -125,14 +160,20 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
       const result = await performTwoWaySync(sessions, courses, accessToken);
 
       if (result.success) {
-        setLastSyncTime(new Date());
+        const syncTime = new Date();
+        setLastSyncTime(syncTime);
+        try {
+          localStorage.setItem('googleCalendarLastSync', syncTime.toISOString());
+        } catch (e) {
+          console.error('Failed to persist last sync time:', e);
+        }
         setSyncStatus({
           type: 'success',
           message: `Synced ${result.syncedToCalendar} sessions to calendar`,
         });
 
         // If there are imported sessions, notify parent component
-        if (result.importedFromCalendar.length > 0 && onSessionsImported) {
+        if (onSessionsImported) {
           onSessionsImported(result.importedFromCalendar);
         }
       } else {
@@ -158,6 +199,12 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     setIsConnected(false);
     setLastSyncTime(null);
     setSyncStatus({ type: null, message: '' });
+    try {
+      localStorage.removeItem('googleCalendarAccessToken');
+      localStorage.removeItem('googleCalendarLastSync');
+    } catch (e) {
+      console.error('Failed to clear stored credentials:', e);
+    }
   };
 
   return (
@@ -198,7 +245,7 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         {/* Action Buttons */}
         <div className="flex gap-2">
           {!isConnected ? (
-            <Button onClick={() => login()} className="w-full">
+            <Button onClick={() => login()} className="w-full bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md">
               <LogIn className="w-4 h-4 mr-2" />
               Connect Google Calendar
             </Button>
@@ -207,7 +254,7 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
               <Button
                 onClick={handleSync}
                 disabled={isSyncing}
-                className="flex-1"
+                className="flex-1 bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:bg-gray-400"
               >
                 <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
                 {isSyncing ? 'Syncing...' : 'Sync Now'}
@@ -236,20 +283,6 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
           </div>
         )}
 
-        {/* Info & Debug */}
-        <div className="text-xs text-gray-500 space-y-1">
-          <p>• All study sessions will be synced to a dedicated calendar</p>
-          <p>• Changes in either app or calendar will be synchronized</p>
-          {isConnected && (
-            <>
-              <p>• Auto-sync: Every 3 minutes + on session changes</p>
-              <p>• Syncs when you return to this tab</p>
-            </>
-          )}
-          <p>• Calendar name: "Intelligent Study Planner"</p>
-          <p className="opacity-70">• Origin: {window.location.origin}</p>
-          <p className="opacity-70">• Client ID present: {String(!!import.meta.env.VITE_GOOGLE_CLIENT_ID)}</p>
-        </div>
       </CardContent>
     </Card>
   );

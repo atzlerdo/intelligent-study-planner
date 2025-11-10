@@ -125,7 +125,7 @@ export function StudyBlockDialog({ open, onClose, onSave, block }: StudyBlockDia
           <Button variant="outline" onClick={onClose}>
             Abbrechen
           </Button>
-          <Button onClick={handleSubmit} disabled={duration <= 0}>
+          <Button onClick={handleSubmit} disabled={duration <= 0} size="lg" className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:bg-gray-400">
             {block ? 'Speichern' : 'Erstellen'}
           </Button>
         </DialogFooter>

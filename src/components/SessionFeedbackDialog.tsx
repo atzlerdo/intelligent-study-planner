@@ -352,7 +352,7 @@ export function SessionFeedbackDialog({
           <Button variant="outline" onClick={onClose} className="flex-1">
             Abbrechen
           </Button>
-          <Button onClick={handleSubmit} className="flex-1">
+          <Button onClick={handleSubmit} className="flex-1 bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md">
             Speichern
           </Button>
         </DialogFooter>

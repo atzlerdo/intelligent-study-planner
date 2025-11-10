@@ -44,13 +44,13 @@ export function BottomNavigation({ currentView, onViewChange }: BottomNavigation
               <button
                 key={item.id}
                 onClick={() => handleNavClick(item.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+                className={`w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl transition-all text-lg font-bold ${
                   isActive 
-                    ? 'bg-gray-900 text-white hover:bg-gray-800 shadow' 
-                    : 'bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 shadow-sm'
+                    ? 'bg-gradient-to-r from-gray-900 to-gray-800 text-white hover:from-gray-800 hover:to-gray-700 shadow-lg border-2 border-gray-700' 
+                    : 'bg-gradient-to-br from-white to-gray-50 text-gray-900 border-2 border-gray-500 hover:from-gray-50 hover:to-gray-100 hover:border-gray-600 shadow-lg hover:shadow-xl'
                 }`}
               >
-                <Icon className="w-5 h-5" />
+                <Icon className="w-6 h-6 flex-shrink-0" />
                 <span>{item.label}</span>
               </button>
             );
@@ -61,13 +61,13 @@ export function BottomNavigation({ currentView, onViewChange }: BottomNavigation
       {/* Burger Menu Bubble - Bottom Left */}
       <button
         onClick={() => setIsMenuOpen(!isMenuOpen)}
-        className={`fixed bottom-6 left-6 z-[70] w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all duration-300 ${
+        className={`fixed bottom-6 left-6 z-[70] w-16 h-16 rounded-full shadow-xl flex items-center justify-center transition-all duration-300 ${
           isMenuOpen 
-            ? 'bg-blue-600 text-white rotate-90' 
-            : 'bg-white text-gray-600 hover:bg-gray-50'
+            ? 'bg-gray-900 text-white rotate-90' 
+            : 'bg-gray-900 text-white hover:bg-gray-800 border-2 border-gray-700'
         }`}
       >
-        {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+        {isMenuOpen ? <X className="w-7 h-7" /> : <Menu className="w-7 h-7" />}
       </button>
     </>
   );
