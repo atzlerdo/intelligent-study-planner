@@ -255,9 +255,8 @@ export async function syncSessionsToGoogleCalendar(
  * Import events from Google Calendar back to app (two-way sync)
  */
 export async function importEventsFromGoogleCalendar(
-  accessToken: string,
-  _courses: Course[]
-): Promise<{ success: boolean; events: any[]; error?: string }> {
+  accessToken: string
+): Promise<{ success: boolean; events: ScheduledSession[]; error?: string }> {
   try {
     const calendarId = await getOrCreateStudyCalendar(accessToken);
 
@@ -274,9 +273,9 @@ export async function importEventsFromGoogleCalendar(
 
 
     // Convert calendar events back to ScheduledSessions format, including last updated time
-    const importedSessions = events
-      .filter((event: any) => event.extendedProperties?.private?.sessionId)
-      .map((event: any) => {
+    const importedSessions: ScheduledSession[] = events
+  .filter((event: unknown) => (event as { extendedProperties?: { private?: { sessionId?: string } } }).extendedProperties?.private?.sessionId)
+  .map((event: { extendedProperties: { private: { sessionId: string; courseId: string } }; start: { dateTime: string }; end: { dateTime: string }; description?: string; updated?: string }): ScheduledSession => {
         const startDateTime = new Date(event.start.dateTime);
         const endDateTime = new Date(event.end.dateTime);
 
@@ -312,6 +311,7 @@ export async function importEventsFromGoogleCalendar(
         };
       });
 
+    console.log(`📥 Imported ${importedSessions.length} sessions from Google Calendar`);
     return { success: true, events: importedSessions };
   } catch (error) {
     console.error('Error importing from Google Calendar:', error);
@@ -325,6 +325,10 @@ export async function importEventsFromGoogleCalendar(
 
 /**
  * Perform two-way sync: push local changes and pull remote changes
+ * Strategy: Google Calendar is the source of truth
+ * - Sessions in Google Calendar are kept/updated in the app
+ * - Local-only sessions are pushed to Google Calendar (new sessions)
+ * - Sessions that were previously in Google but are now missing are deleted from app
  */
 export async function performTwoWaySync(
   localSessions: ScheduledSession[],
@@ -334,46 +338,82 @@ export async function performTwoWaySync(
   success: boolean;
   syncedToCalendar: number;
   importedFromCalendar: any[];
+  syncedSessionIds: string[];
   error?: string;
 }> {
   try {
-    // Import remote events first
-    const importResult = await importEventsFromGoogleCalendar(accessToken, courses);
+    // Step 1: Get what's currently in Google Calendar
+  const importResult = await importEventsFromGoogleCalendar(accessToken);
     if (!importResult.success) {
       return {
         success: false,
         syncedToCalendar: 0,
         importedFromCalendar: [],
+        syncedSessionIds: [],
         error: importResult.error,
       };
     }
     const remoteSessions: ScheduledSession[] = importResult.events;
 
-    // Merge: for each session, prefer the one with the latest lastModified
+    // Step 2: Get the list of session IDs that were previously synced to Google
+    // This helps us distinguish between "new local session" vs "deleted from Google"
+    const previouslySyncedIds = new Set<string>(
+      JSON.parse(localStorage.getItem('googleCalendarSyncedIds') || '[]')
+    );
+
+    console.log('🔄 Two-way sync starting:', {
+      localSessions: localSessions.length,
+      localSessionIds: localSessions.map(s => s.id),
+      remoteSessions: remoteSessions.length,
+      remoteSessionIds: remoteSessions.map(s => s.id),
+      previouslySyncedCount: previouslySyncedIds.size,
+      previouslySyncedIds: Array.from(previouslySyncedIds)
+    });
+
+    // Step 3: Build the merged result
     const mergedSessions: ScheduledSession[] = [];
     const localById = new Map(localSessions.map(s => [s.id, s]));
     const remoteById = new Map(remoteSessions.map(s => [s.id, s]));
     const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
+    
     for (const id of allIds) {
       const local = localById.get(id);
       const remote = remoteById.get(id);
-      if (local && remote) {
-        // Compare lastModified (default to 0 if missing)
-        const localMod = local.lastModified || 0;
-        const remoteMod = remote.lastModified || 0;
-        if (remoteMod > localMod) {
-          mergedSessions.push({ ...remote });
+      
+      if (remote) {
+        // Exists in Google Calendar
+        if (local) {
+          // Also exists locally: compare timestamps, prefer newer
+          const localMod = local.lastModified || 0;
+          const remoteMod = remote.lastModified || 0;
+          const chosen = remoteMod > localMod ? remote : local;
+          console.log(`✏️ Session ${id} exists in both, using ${remoteMod > localMod ? 'remote' : 'local'} version (remote: ${new Date(remoteMod).toISOString()}, local: ${new Date(localMod).toISOString()})`);
+          mergedSessions.push({ ...chosen });
         } else {
+          // Only in Google Calendar: add it (created in Google)
+          console.log(`➕ Session ${id} only in Google Calendar, adding to app`);
+          mergedSessions.push({ ...remote });
+        }
+      } else if (local) {
+        // Only exists locally
+        if (previouslySyncedIds.has(id)) {
+          // Was previously synced but now missing from Google → deleted in Google
+          console.log(`🗑️ Session ${id} was deleted from Google Calendar, removing from app`);
+          // Don't include it in merged sessions
+        } else {
+          // Never synced before → new local session, push to Google
+          console.log(`🆕 Session ${id} is new local session, will push to Google`);
           mergedSessions.push({ ...local });
         }
-      } else if (remote) {
-        mergedSessions.push({ ...remote });
-      } else if (local) {
-        mergedSessions.push({ ...local });
       }
     }
 
-    // Push merged sessions to Google Calendar
+    console.log('🔄 Merge complete:', {
+      mergedSessions: mergedSessions.length,
+      willPushToGoogle: mergedSessions.length
+    });
+
+    // Step 5: Push merged sessions to Google Calendar
     const syncResult = await syncSessionsToGoogleCalendar(
       mergedSessions,
       courses,
@@ -384,14 +424,24 @@ export async function performTwoWaySync(
         success: false,
         syncedToCalendar: 0,
         importedFromCalendar: mergedSessions,
+        syncedSessionIds: [],
         error: syncResult.error,
       };
+    }
+
+    // Step 6: Track all merged session IDs as "synced" (after successful push)
+    const syncedIds = mergedSessions.map(s => s.id);
+    try {
+      localStorage.setItem('googleCalendarSyncedIds', JSON.stringify(syncedIds));
+    } catch (e) {
+      console.error('Failed to persist synced IDs:', e);
     }
 
     return {
       success: true,
       syncedToCalendar: syncResult.syncedCount,
       importedFromCalendar: mergedSessions,
+      syncedSessionIds: syncedIds,
       error: undefined,
     };
   } catch (error) {
@@ -400,6 +450,7 @@ export async function performTwoWaySync(
       success: false,
       syncedToCalendar: 0,
       importedFromCalendar: [],
+      syncedSessionIds: [],
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }

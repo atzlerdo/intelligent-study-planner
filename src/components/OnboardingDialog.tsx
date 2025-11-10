@@ -117,7 +117,12 @@ export function OnboardingDialog({ open, onComplete }: OnboardingDialogProps) {
         </div>
 
         <DialogFooter>
-          <Button onClick={handleComplete} className="w-full">
+          {/* Make the primary action visually stronger (dark background, larger height, clear affordance) */}
+          <Button
+            onClick={handleComplete}
+            size="lg"
+            className="w-full bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md shadow-gray-400/30 dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-gray-200"
+          >
             Los geht's
           </Button>
         </DialogFooter>

@@ -36,7 +36,7 @@ export function generateSchedule(
     minutesRemaining: (course.estimatedHours - course.completedHours) * 60,
   }));
 
-  let currentDate = new Date(startDate);
+  const currentDate = new Date(startDate);
   currentDate.setHours(0, 0, 0, 0);
 
   // Distribute workload across available blocks
