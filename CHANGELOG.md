@@ -1,5 +1,35 @@
 # Changelog
 
+## [v0.4.0] - 2025-11-11
+
+### Added
+- **Recurring sessions support**: Create, edit, and sync recurring study sessions with full RRULE pattern configuration (daily, weekly, monthly, yearly, interval, end date/count, weekday/monthday selection)
+- **RecurrencePatternPicker UI**: Visual recurrence pattern picker integrated into session dialog
+- **Google Calendar sync for recurring events**: Recurring sessions are exported/imported as RRULE-based events; exceptions/overrides supported
+- **Master + exceptions model**: Efficient storage and sync of recurring sessions using master/instance pattern (mirrors Google Calendar)
+- **Session expansion utility**: `expandSessionInstances()` generates visible occurrences for calendar views
+- **New files**: `RecurrencePatternPicker.tsx`, `RECURRING_SESSIONS.md`, `SYNC_FIX_RECURRING.md`
+- **Sync stats display**: Track and display recurring session sync stats
+
+### Changed
+- **Sync logic overhaul**: All sync/merge logic now preserves recurrence fields, deduplicates by session ID, and handles exceptions
+- **Hashing and merge**: Recurrence field included in hash-based change detection and merge logic
+- **Improved logging**: Detailed logs for recurrence handling, merge decisions, and sync operations
+
+### Fixed
+- **Recurrence loss on sync**: Recurrence field now preserved during all sync/merge operations (see `SYNC_FIX_RECURRING.md`)
+- **Bug: Recurring session count in stats**: Recurring sessions now counted in sync stats
+- **UI validation**: Recurrence pattern picker validates required fields (e.g., at least one weekday for weekly)
+
+### Documentation
+- See `RECURRING_SESSIONS.md` for full technical and UI details
+- See `SYNC_FIX_RECURRING.md` for bugfix and testing checklist
+
+### Technical Debt / Follow-ups
+- Exception/instance editing UI (delete/modify single occurrence)
+- Human-readable recurrence summaries in calendar views
+- Lazy loading/caching of expanded instances for performance
+
 All notable changes to this project will be documented in this file.
 
 ## [v0.3.0] - 2025-11-10
