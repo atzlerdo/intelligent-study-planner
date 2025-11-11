@@ -79,6 +79,7 @@ export function GoogleCalendarSyncService({
         return;
       }
 
+      const syncStartTime = Date.now();
       const result = await performTwoWaySync(sessions, courses, accessToken);
 
       if (result.success) {
@@ -90,7 +91,7 @@ export function GoogleCalendarSyncService({
         }
 
         if (result.importedFromCalendar.length > 0 && onSessionsImported) {
-          onSessionsImported(result.importedFromCalendar);
+          onSessionsImported(result.importedFromCalendar, syncStartTime);
         }
       } else {
         console.error('Sync failed:', result.error);
@@ -111,14 +112,15 @@ export function GoogleCalendarSyncService({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSyncTrigger]);
 
-  // Periodic sync every 3 minutes when connected and tab is visible
+  // Periodic sync every 5-10 minutes when connected and tab is visible
   useEffect(() => {
     if (!isConnected || isSyncing) return;
 
-    const SYNC_INTERVAL = 3 * 60 * 1000; // 3 minutes
+    // Configurable sync interval (default 5 minutes, can be adjusted)
+    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes for better performance
     const intervalId = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        console.log('🔄 Periodic auto-sync (3 min interval)');
+        console.log('🔄 Periodic auto-sync (5 min interval)');
         handleSync();
       }
     }, SYNC_INTERVAL);

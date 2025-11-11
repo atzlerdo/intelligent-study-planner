@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -12,6 +12,7 @@ import { GoogleCalendarSyncService } from './GoogleCalendarSyncService';
 import type { PanInfo } from 'motion/react';
 import { useIsMobile } from './ui/use-mobile';
 import { de } from 'date-fns/locale';
+import { expandSessionInstances } from '../lib/googleCalendar';
 
 interface WeekCalendarProps {
   sessions: ScheduledSession[];
@@ -28,11 +29,14 @@ interface WeekCalendarProps {
   isDialogOpen?: boolean; // Whether any dialog is open (to prevent drag gestures)
 }
 
-export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId, isDialogOpen }: WeekCalendarProps) {
+export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, /* editingSessionId unused */ isDialogOpen }: WeekCalendarProps) {
   const isMobile = useIsMobile();
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const x = useMotionValue(0);
+  // Require an explicit fresh pointer down after dialogs close before horizontal week drag is re-enabled.
+  // This prevents accidental horizontal panning when a dialog is dismissed with Escape and the user moves the mouse.
+  const [dragArmed, setDragArmed] = useState(false);
   
   // Calendar picker state
   const [calendarDate, setCalendarDate] = useState(new Date());
@@ -85,12 +89,14 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     if (!isDialogOpen) {
       // Dialog just closed, record the time
       lastDialogCloseTime.current = Date.now();
+      // Disarm drag until a new pointer down occurs
+      setDragArmed(false);
     }
   }, [isDialogOpen]);
 
   // Global pointer move listener for smooth dragging
   useEffect(() => {
-    if (!draggedSession) return;
+    if (!draggedSession || isDialogOpen) return;
 
     const handleGlobalPointerMove = (e: PointerEvent) => {
       e.preventDefault();
@@ -152,49 +158,79 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
 
   // Track initial mount to determine scroll behavior
   const [isInitialMount, setIsInitialMount] = useState(true);
+  // Preserve scroll position across week changes so users maintain consistent timeline view
+  const [savedScrollPosition, setSavedScrollPosition] = useState<number | null>(null);
 
   // Check if we're viewing the current week
   const isCurrentWeek = currentWeekOffset === 0;
 
-  // Reset drag position when dialog opens to prevent week jumping
+  // Reset drag position and states when dialog opens to prevent week jumping and drag interactions
   useEffect(() => {
     if (isDialogOpen) {
       x.set(0);
+      // Clear any ongoing drag operations
+      setDraggedSession(null);
+      setDragSessionPosition(null);
+      setDragStartPos(null);
+      setDragOffset(null);
+      setDraggedSessionSize(null);
+      setIsDraggingNew(false);
+      setDragStart(null);
+      setDragCurrent(null);
+      // While dialog open, ensure drag is not armed
+      setDragArmed(false);
     }
   }, [isDialogOpen, x]);
 
   // Auto-scroll to current time on mount and week change with 2-hour buffer
   useEffect(() => {
     if (scrollContainerRef.current && isCurrentWeek) {
-      const currentHour = currentTime.getHours();
-      const currentMinutes = currentTime.getMinutes();
-      const hourHeight = 60;
-      
-      const currentPosition = (currentHour * hourHeight) + (currentMinutes / 60 * hourHeight);
-      // 2-hour buffer = 2 * 60px = 120px
-      // On mobile, center the current time more for better visibility
-      const buffer = isMobile ? 2.5 * hourHeight : 2 * hourHeight;
-      const scrollPosition = Math.max(0, currentPosition - buffer);
-      
-      // Use instant scroll on mount, smooth on week change
-      scrollContainerRef.current.scrollTo({
-        top: scrollPosition,
-        behavior: isInitialMount ? 'auto' : 'smooth'
-      });
+      if (savedScrollPosition !== null && !isInitialMount) {
+        // Restore saved scroll position when returning to a week
+        scrollContainerRef.current.scrollTo({
+          top: savedScrollPosition,
+          behavior: 'smooth'
+        });
+      } else {
+        // First mount or no saved position: scroll to current time
+        const currentHour = currentTime.getHours();
+        const currentMinutes = currentTime.getMinutes();
+        const hourHeight = 60;
+        
+        const currentPosition = (currentHour * hourHeight) + (currentMinutes / 60 * hourHeight);
+        // 2-hour buffer = 2 * 60px = 120px
+        // On mobile, center the current time more for better visibility
+        const buffer = isMobile ? 2.5 * hourHeight : 2 * hourHeight;
+        const scrollPosition = Math.max(0, currentPosition - buffer);
+        
+        // Use instant scroll on mount, smooth on week change
+        scrollContainerRef.current.scrollTo({
+          top: scrollPosition,
+          behavior: isInitialMount ? 'auto' : 'smooth'
+        });
+      }
       
       if (isInitialMount) setIsInitialMount(false);
     } else if (scrollContainerRef.current && !isCurrentWeek) {
-      // For non-current weeks, scroll to 6am as a reasonable default
-      const hourHeight = 60;
-      const defaultScroll = 6 * hourHeight;
-      scrollContainerRef.current.scrollTo({
-        top: defaultScroll,
-        behavior: isInitialMount ? 'auto' : 'smooth'
-      });
+      // For non-current weeks, restore saved scroll position or use previous week's scroll
+      if (savedScrollPosition !== null) {
+        scrollContainerRef.current.scrollTo({
+          top: savedScrollPosition,
+          behavior: isInitialMount ? 'auto' : 'smooth'
+        });
+      } else {
+        // Default to 6am for first visit
+        const hourHeight = 60;
+        const defaultScroll = 6 * hourHeight;
+        scrollContainerRef.current.scrollTo({
+          top: defaultScroll,
+          behavior: isInitialMount ? 'auto' : 'smooth'
+        });
+      }
       
       if (isInitialMount) setIsInitialMount(false);
     }
-  }, [currentWeekOffset, isCurrentWeek, isMobile, isInitialMount]);
+  }, [currentWeekOffset, isCurrentWeek, isMobile, isInitialMount, savedScrollPosition]);
 
   const allHours = Array.from({ length: 24 }, (_, i) => i);
 
@@ -222,6 +258,49 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   };
 
   const weekStart = getWeekStart(currentWeekOffset);
+  const weekEnd = useMemo(() => {
+    const end = new Date(weekStart);
+    end.setDate(end.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return end;
+  }, [weekStart]);
+
+  // Expand recurring sessions to instances within the current week window
+  const sessionsExpandedForWeek = useMemo(() => {
+    const start = new Date(weekStart);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(weekEnd);
+    const expanded: ScheduledSession[] = [];
+    for (const s of sessions) {
+      if (s.recurrence) {
+        const instances = expandSessionInstances(s, start, end);
+        expanded.push(...instances);
+      } else {
+        expanded.push(s);
+      }
+    }
+    // Deduplicate by id keeping latest lastModified
+    const byId = new Map<string, ScheduledSession>();
+    for (const s of expanded) {
+      const prev = byId.get(s.id);
+      if (!prev || (s.lastModified || 0) >= (prev.lastModified || 0)) {
+        byId.set(s.id, s);
+      }
+    }
+    const result = Array.from(byId.values());
+    // Debug: count expanded vs original
+    try {
+      const recurringCount = sessions.filter(s => !!s.recurrence).length;
+      console.log('🧩 Week expansion:', {
+        weekStart: start.toISOString().split('T')[0],
+        weekEnd: end.toISOString().split('T')[0],
+        inputSessions: sessions.length,
+        recurringMasters: recurringCount,
+        outputInstances: result.length
+      });
+    } catch {}
+    return result;
+  }, [sessions, weekStart, weekEnd]);
   const weekDays = Array.from({ length: 7 }, (_, i) => {
     const date = new Date(weekStart);
     date.setDate(weekStart.getDate() + i);
@@ -231,17 +310,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   const getSessionsForDay = (date: Date): ScheduledSession[] => {
     const dateStr = formatDateToLocal(date);
     
-    // First, deduplicate sessions by ID (keep the one with latest lastModified)
-    const sessionById = new Map<string, ScheduledSession>();
-    for (const s of sessions) {
-      const existing = sessionById.get(s.id);
-      if (!existing || (s.lastModified || 0) > (existing.lastModified || 0)) {
-        sessionById.set(s.id, s);
-      }
-    }
-    const uniqueSessions = Array.from(sessionById.values());
+    // Use week-expanded sessions when filtering per day
+    const uniqueSessions = sessionsExpandedForWeek;
     
-    const filteredSessions = uniqueSessions.filter(s => {
+    let filteredSessions = uniqueSessions.filter(s => {
       // Keep the session visible even when editing (don't hide the original)
       // The preview system will handle showing changes if needed
       
@@ -268,6 +340,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     // Add preview session if it belongs to this day
     if (previewSession) {
       if (previewSession.date === dateStr) {
+        // Remove the original session with the same id to avoid duplicates when previewing
+        filteredSessions = filteredSessions.filter(s => s.id !== previewSession.id);
         filteredSessions.push(previewSession);
       } else if (previewSession.endDate && previewSession.endDate !== previewSession.date) {
         const sessionStart = new Date(previewSession.date);
@@ -279,10 +353,20 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         currentDate.setHours(0, 0, 0, 0);
         
         if (currentDate >= sessionStart && currentDate <= sessionEnd) {
+          // Remove the original session with the same id to avoid duplicates when previewing
+          filteredSessions = filteredSessions.filter(s => s.id !== previewSession.id);
           filteredSessions.push(previewSession);
         }
       }
     }
+    // Debug: List sessions for the day including expanded ones
+    try {
+      console.log('🗓️ Day sessions after expansion:', {
+        day: dateStr,
+        count: filteredSessions.length,
+        ids: filteredSessions.map(s => s.id)
+      });
+    } catch {}
     
     return filteredSessions;
   };
@@ -401,10 +485,18 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   };
 
   const goToWeek = (offset: number) => {
+    // Save current scroll position before changing weeks
+    if (scrollContainerRef.current) {
+      setSavedScrollPosition(scrollContainerRef.current.scrollTop);
+    }
     setCurrentWeekOffset(offset);
   };
 
   const goToToday = () => {
+    // Save current scroll position before changing weeks
+    if (scrollContainerRef.current) {
+      setSavedScrollPosition(scrollContainerRef.current.scrollTop);
+    }
     setCurrentWeekOffset(0);
   };
 
@@ -479,6 +571,11 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
 
   // Session drag handlers
   const handleSessionPointerDown = (session: ScheduledSession, date: Date, e: React.PointerEvent) => {
+    // Prevent any drag interaction when a dialog is open
+    if (isDialogOpen) {
+      return;
+    }
+    
     e.stopPropagation();
     setIsInteractingWithSession(true);
 
@@ -569,11 +666,11 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       const dayWidth = scrollContainerRef.current ? 
         (scrollContainerRef.current.clientWidth - 56) / 7 : 100; // Subtract time column width
       
-      // Calculate day offset (how many days moved)
-      const dayOffset = Math.round(dragSessionPosition.x / dayWidth);
+      // Calculate day offset (how many days moved) relative to drag start position
+      const dayOffset = Math.round((dragSessionPosition.x - dragStartPos.x) / dayWidth);
       
-      // Calculate time offset (in minutes)
-      const timeOffsetMinutes = Math.round((dragSessionPosition.y / hourHeight) * 60);
+      // Calculate time offset (in minutes) relative to drag start position
+      const timeOffsetMinutes = Math.round(((dragSessionPosition.y - dragStartPos.y) / hourHeight) * 60);
       const snappedTimeOffset = snapTo15Min(timeOffsetMinutes);
       
       // Calculate new date
@@ -628,8 +725,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
 
   // Drag-to-create handlers
   const handleCellMouseDown = (date: Date, e: React.MouseEvent) => {
-    // Don't create a new session if we're interacting with an existing session
-    if (!onCreateSession || draggedSession || isInteractingWithSession) return;
+    // Don't create a new session if we're interacting with an existing session or a dialog is open
+    if (!onCreateSession || draggedSession || isInteractingWithSession || isDialogOpen) return;
     
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -854,7 +951,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                   courses={courses}
                   onSessionsImported={onSessionsImported}
                   autoSyncTrigger={0}
-                  onStateChange={() => {}}
+                  onStateChange={({ isConnected, isSyncing }) => {
+                    setGoogleConnected(isConnected);
+                    setGoogleSyncing(isSyncing);
+                  }}
                 />
               </DialogContent>
             </Dialog>
@@ -872,10 +972,18 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
           }}
         >
           <motion.div
-            drag={!draggedSession && !isDraggingNew && !isInteractingWithSession && !isDialogOpen && !isDialogRecentlyClosed() ? "x" : false}
+            // Only allow horizontal drag when we explicitly armed it via a fresh pointer down.
+            drag={!draggedSession && !isDraggingNew && !isInteractingWithSession && !isDialogOpen && !isDialogRecentlyClosed() && dragArmed ? "x" : false}
             dragConstraints={{ left: 0, right: 0 }}
             dragElastic={0.2}
             onDragEnd={handleDragEnd}
+            onPointerDown={() => {
+              // Ignore if a dialog is open or just closed (cooldown) or already armed.
+              if (isDialogOpen || isDialogRecentlyClosed() || dragArmed) return;
+              // If the pointer down originated from an interactive session element we don't arm global drag here.
+              // We detect by checking for data-session or closest with our session classes; simpler: rely on stopPropagation in session handlers.
+              setDragArmed(true);
+            }}
             style={{ x }}
             className="min-w-full h-full"
           >
@@ -1137,7 +1245,9 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                         {daySessions.map((session) => {
                           const pos = calculateSessionPosition(session, date);
                           const isDragging = draggedSession?.id === session.id;
-                          const isPreview = previewSession && session.id === previewSession.id;
+                          // Only mark the actual preview object as preview (by reference),
+                          // not any other session with the same id. This prevents duplicate keys/rendering.
+                          const isPreview = !!previewSession && session === previewSession;
                           // ...existing session rendering logic...
                           let needsEvaluation = false;
                           if (session.endTime && !session.completed) {
@@ -1167,7 +1277,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                                 height: `${pos.height}px`,
                                 zIndex: isPreview ? 20 : 10,
                                 touchAction: 'none',
-                                opacity: isDragging || isPreview ? 0.5 : 1,
+                                opacity: (isDragging || isPreview) && !needsEvaluation ? 0.5 : 1,
                               }}
                               onPointerDown={(e) => handleSessionPointerDown(session, date, e)}
                               onPointerMove={handleSessionPointerMove}

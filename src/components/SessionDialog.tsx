@@ -6,11 +6,13 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Calendar } from './ui/calendar';
+import { Switch } from './ui/switch';
 import type { ScheduledSession, Course } from '../types';
 import { calculateDuration } from '../lib/scheduler';
-import { Trash2, Plus, Info, CalendarIcon, ChevronUp, ChevronDown, Clock } from 'lucide-react';
+import { Trash2, Plus, Info, CalendarIcon, ChevronUp, ChevronDown, Clock, Repeat } from 'lucide-react';
 import { format } from 'date-fns';
 import { de } from 'date-fns/locale';
+import { RecurrencePatternPicker, buildRRuleString, parseRRuleString, type RecurrencePattern } from './RecurrencePatternPicker';
 
 // Helper functions for date formatting
 const formatDateDE = (isoDate: string): string => {
@@ -43,7 +45,7 @@ const parseDateDE = (deDate: string): string => {
 interface SessionDialogProps {
   open: boolean;
   onClose: () => void;
-  onSave: (session: Omit<ScheduledSession, 'id'>, recurring?: { enabled: boolean }) => void;
+  onSave: (session: Omit<ScheduledSession, 'id'>) => void;
   onDelete?: (sessionId: string) => void;
   session?: ScheduledSession;
   courses: Course[];
@@ -67,6 +69,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   const [startTime, setStartTime] = useState('18:00');
   const [endTime, setEndTime] = useState('21:00');
   const [recurring, setRecurring] = useState(false);
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null);
   
   // Clock picker state
   const [startClockMode, setStartClockMode] = useState<'hours' | 'minutes'>('hours');
@@ -263,7 +266,16 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       setEndDateDisplay(formatDateDE(sessionEndDate));
       setStartTime(session.startTime);
       setEndTime(session.endTime);
-      setRecurring(false);
+      
+      // Initialize recurrence if editing a recurring session
+      if (session.recurrence) {
+        setRecurring(true);
+        const parsed = parseRRuleString(session.recurrence.rrule, session.recurrence.dtstart);
+        setRecurrencePattern(parsed);
+      } else {
+        setRecurring(false);
+        setRecurrencePattern(null);
+      }
     } else {
       // Default to empty (unassigned session)
       setCourseId('');
@@ -295,6 +307,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       setStartTime(initialStartTime || '18:00');
       setEndTime(initialEndTime || '21:00');
       setRecurring(false);
+      setRecurrencePattern(null);
     }
   }, [session, open, initialDate, initialStartTime, initialEndTime]);
 
@@ -358,6 +371,77 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       return;
     }
 
+    // Validate recurrence if enabled
+  if (recurring) {
+      if (!recurrencePattern) {
+        alert('Bitte konfiguriere das Wiederholungsmuster.');
+        return;
+      }
+      
+      // For WEEKLY frequency, at least one day must be selected
+      if (recurrencePattern.frequency === 'WEEKLY' && (!recurrencePattern.byDay || recurrencePattern.byDay.length === 0)) {
+        alert('Bitte wähle mindestens einen Wochentag aus.');
+        return;
+      }
+
+      // Align DTSTART with selected BYDAY(s) so first occurrence appears in the current/closest week.
+      // Strategy: prefer the nearest allowed weekday ON or BEFORE the chosen date (backward alignment).
+      // If no allowed weekday exists in the previous 6 days (unlikely), fall back to forward alignment.
+      if (recurrencePattern.frequency === 'WEEKLY' && recurrencePattern.byDay && recurrencePattern.byDay.length > 0 && date) {
+        const mapByDayToNum: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+        const allowedDays = recurrencePattern.byDay.map(d => mapByDayToNum[d]).filter((n): n is number => typeof n === 'number');
+        if (allowedDays.length) {
+          const originalStart = new Date(date);
+          const currentDow = originalStart.getDay();
+          let alignedDateObj = new Date(originalStart);
+          let offsetDays = 0;
+
+          if (!allowedDays.includes(currentDow)) {
+            // Backward offsets: how many days to subtract to reach an allowed weekday (0..6)
+            const backwardOffsets = allowedDays.map(dow => (currentDow - dow + 7) % 7); // 0 means same day
+            const minBackward = Math.min(...backwardOffsets.filter(o => o > 0)); // exclude 0 (already handled)
+
+            if (minBackward > 0 && minBackward <= 6) {
+              // Align backwards within the last 6 days
+              alignedDateObj.setDate(originalStart.getDate() - minBackward);
+              offsetDays = -minBackward;
+            } else {
+              // Fallback: forward alignment (previous logic)
+              const forwardOffsets = allowedDays.map(dow => (dow - currentDow + 7) % 7).map(v => (v === 0 ? 7 : v));
+              const minForward = Math.min(...forwardOffsets);
+              alignedDateObj.setDate(originalStart.getDate() + minForward);
+              offsetDays = minForward;
+            }
+          }
+
+            const alignedDateIso = format(alignedDateObj, 'yyyy-MM-dd');
+            // Adjust endDate with same offset if multi-day (only when endDate !== date)
+            let alignedEndDateIso = alignedDateIso;
+            if (endDate) {
+              const endObj = new Date(endDate);
+              endObj.setDate(endObj.getDate() + offsetDays);
+              alignedEndDateIso = format(endObj, 'yyyy-MM-dd');
+            }
+
+            console.log('↔️ Weekly recurrence DTSTART alignment:', {
+              originalDate: date,
+              originalEndDate: endDate,
+              byDay: recurrencePattern.byDay,
+              strategy: offsetDays < 0 ? 'backward' : offsetDays === 0 ? 'none' : 'forward',
+              offsetDays,
+              alignedDate: alignedDateIso,
+              alignedEndDate: alignedEndDateIso,
+            });
+
+            // Use aligned values for subsequent session creation (don't rely on async setState for this submit);
+            // effectiveDate/effectiveEndDate will be computed below for payload.
+            // Update state so UI reflects alignment after submit
+            setDate(alignedDateIso);
+            setEndDate(alignedEndDateIso);
+        }
+      }
+    }
+
     console.log('📝 Session Dialog Submit:', {
       date,
       endDate,
@@ -365,22 +449,65 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       endTime,
       duration,
       courseId,
+      recurring,
+      recurrencePattern,
       currentTime: new Date().toString(),
       dateObject: new Date(date).toString(),
       endDateObject: new Date(endDate).toString()
     });
 
-    onSave({
+    // Prepare effective dates (use possibly aligned values if state just updated this tick)
+    const effectiveDate = date;
+    const effectiveEndDate = endDate;
+
+    const sessionData: Omit<ScheduledSession, 'id'> = {
       courseId: courseId || undefined, // Convert empty string to undefined for unassigned sessions
       studyBlockId: 'manual',
-      date,
-      endDate: endDate !== date ? endDate : undefined, // Only save endDate if different from date
+      date: effectiveDate,
+      endDate: effectiveEndDate !== effectiveDate ? effectiveEndDate : undefined, // Only save endDate if different from date
       startTime,
       endTime,
       durationMinutes: duration,
       completed: false,
       completionPercentage: 0,
-    }, { enabled: recurring });
+    };
+
+    // Add recurrence data if enabled
+    if (recurring && recurrencePattern) {
+      // Adjust COUNT semantics: user-entered count should include the first visible occurrence (start date or first BYDAY),
+      // but if the start date's weekday is NOT in BYDAY, RRULE won't include it. In that case we subtract 1 from COUNT so
+      // total visible instances (base date + RRULE occurrences) equals the user's intended count.
+      let adjustedPattern = { ...recurrencePattern };
+      if (
+        adjustedPattern.endType === 'count' && typeof adjustedPattern.count === 'number' && adjustedPattern.count > 0 &&
+        adjustedPattern.frequency === 'WEEKLY' && adjustedPattern.byDay && adjustedPattern.byDay.length > 0 && effectiveDate
+      ) {
+        const mapByDayToNum: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+        const allowedDays = adjustedPattern.byDay.map(d => mapByDayToNum[d]).filter((n): n is number => typeof n === 'number');
+        const dow = new Date(effectiveDate).getDay();
+        const matches = allowedDays.includes(dow);
+        if (!matches && adjustedPattern.count > 1) {
+          // Reduce RRULE count by 1 to account for the standalone base-date instance
+          adjustedPattern = { ...adjustedPattern, count: adjustedPattern.count - 1 };
+          console.log('🔢 Adjusted RRULE COUNT due to start date not in BYDAY:', {
+            originalCount: recurrencePattern.count,
+            adjustedCount: adjustedPattern.count,
+            effectiveDate,
+            byDay: adjustedPattern.byDay,
+          });
+        }
+      }
+
+      const rruleString = buildRRuleString(adjustedPattern, effectiveDate);
+      sessionData.recurrence = {
+        rrule: rruleString,
+        dtstart: effectiveDate, // date may have been aligned above
+        until: adjustedPattern.endType === 'until' ? adjustedPattern.until : undefined,
+        count: adjustedPattern.endType === 'count' ? adjustedPattern.count : undefined,
+      };
+    }
+
+    onSave(sessionData);
 
     // Don't call onClose() here - let the parent component handle closing
     // This prevents race conditions with state updates
@@ -756,6 +883,45 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
               </div>
             </div>
           </div>
+
+          {/* Recurrence Toggle */}
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <Repeat className="w-4 h-4 text-gray-600" />
+              <Label htmlFor="recurring" className="font-medium cursor-pointer">Wiederholen</Label>
+            </div>
+            <Switch
+              id="recurring"
+              checked={recurring}
+              onCheckedChange={(checked) => {
+                setRecurring(checked);
+                if (!checked) {
+                  setRecurrencePattern(null);
+                } else if (!recurrencePattern) {
+                  // Initialize with default pattern, auto-selecting the weekday of the selected date
+                  const selectedWeekday = date ? new Date(date + 'T00:00:00').getDay() : new Date().getDay();
+                  const weekdayMap = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+                  const defaultWeekday = weekdayMap[selectedWeekday];
+                  
+                  setRecurrencePattern({
+                    frequency: 'WEEKLY',
+                    interval: 1,
+                    byDay: [defaultWeekday], // Auto-select weekday matching the selected date
+                    endType: 'never',
+                  });
+                }
+              }}
+            />
+          </div>
+
+          {/* Recurrence Pattern Picker */}
+          {recurring && (
+            <RecurrencePatternPicker
+              value={recurrencePattern}
+              onChange={setRecurrencePattern}
+              startDate={date}
+            />
+          )}
 
           {duration > 0 && (
             <div className="p-3 bg-blue-50 rounded-lg">

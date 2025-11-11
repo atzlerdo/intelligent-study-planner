@@ -54,6 +54,63 @@ export interface ScheduledSession {
   lastModified?: number; // Unix ms timestamp for merge logic
   googleEventId?: string; // Link to Google Calendar event
   googleCalendarId?: string; // Which calendar this event is in
+  originalTitle?: string; // Original title from Google Calendar (stored but not displayed for unassigned)
+  originalDescription?: string; // Original description from Google Calendar (stored but not displayed for unassigned)
+  
+  // Recurrence pattern (optional - makes this a recurring session)
+  recurrence?: {
+    rrule: string; // RFC 5545 RRULE string (e.g., "FREQ=WEEKLY;BYDAY=MO,WE,FR")
+    dtstart: string; // ISO date string for series start
+    until?: string; // ISO date string for series end (optional)
+    exdates?: string[]; // Excluded dates (ISO date strings)
+    count?: number; // Max number of occurrences
+  };
+  
+  // For instances of recurring sessions
+  recurringEventId?: string; // If this session is an instance of a recurring pattern (references the master session ID)
+  isRecurrenceException?: boolean; // If this instance has been modified from the pattern
+}
+
+// Recurring event series stored separately to avoid expanding all instances
+export interface RecurringEventSeries {
+  id: string; // Master event ID from Google Calendar
+  courseId?: string;
+  rrule: string; // RFC 5545 RRULE string
+  startTime: string; // HH:mm format for the pattern
+  endTime: string; // HH:mm format for the pattern
+  durationMinutes: number;
+  dtstart: string; // ISO date string for series start
+  until?: string; // ISO date string for series end (optional)
+  exdates: string[]; // Dates to exclude (ISO date strings)
+  overrides: Record<string, RecurrenceOverride>; // Date-specific overrides keyed by ISO date
+  googleCalendarId?: string;
+  originalTitle?: string;
+  originalDescription?: string;
+  lastModified?: number;
+}
+
+export interface RecurrenceOverride {
+  date: string; // ISO date string
+  startTime?: string; // If time changed
+  endTime?: string;
+  durationMinutes?: number;
+  cancelled?: boolean; // If this instance was cancelled
+  notes?: string;
+  completed?: boolean;
+  completionPercentage?: number;
+}
+
+// Google Calendar sync statistics
+export interface SyncStats {
+  lastSyncTime?: number; // Unix timestamp
+  lastSyncSuccess: boolean;
+  lastSyncError?: string;
+  totalSynced: number;
+  created: number;
+  updated: number;
+  skipped: number; // Unchanged items
+  deleted: number;
+  recurring: number; // Recurring series processed
 }
 
 export interface Session {

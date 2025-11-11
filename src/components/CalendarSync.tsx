@@ -6,6 +6,7 @@ import { Badge } from './ui/badge';
 import { Calendar, CheckCircle, XCircle, RefreshCw, LogIn } from 'lucide-react';
 import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
+import { SyncStatsDisplay } from './SyncStatsDisplay';
 
 interface CalendarSyncProps {
   sessions: ScheduledSession[];
@@ -67,11 +68,11 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSyncTrigger]);
 
-  // Periodic sync every 3 minutes when connected and tab is visible
+  // Periodic sync every 5 minutes when connected and tab is visible
   useEffect(() => {
     if (!isConnected || isSyncing) return;
 
-    const SYNC_INTERVAL = 3 * 60 * 1000; // 3 minutes
+    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes for better performance
     const intervalId = setInterval(() => {
       // Only sync if tab is visible
       if (document.visibilityState === 'visible') {
@@ -282,6 +283,9 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
             {syncStatus.message}
           </div>
         )}
+
+        {/* Sync Statistics */}
+        {isConnected && <SyncStatsDisplay accessToken={accessToken} isSyncing={isSyncing} />}
 
       </CardContent>
     </Card>
