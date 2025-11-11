@@ -11,6 +11,16 @@ import { CalendarView } from './components/CalendarView';
 import { SessionDialog } from './components/SessionDialog';
 import { OnboardingDialog } from './components/OnboardingDialog';
 import { Button } from './components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog';
 import type { Course, StudyBlock, StudyProgram, ScheduledSession } from './types';
 import { calculateWeeklyAvailableMinutes, generateSchedule, calculateEstimatedEndDate, calculateDuration } from './lib/scheduler';
 import { generateMockSessions } from './lib/mockSessions';
@@ -22,6 +32,11 @@ function App() {
   const [showPastSessionsReview, setShowPastSessionsReview] = useState(false);
   const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
   const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);
+  // Replan missed session dialog state
+  const [showReplanDialog, setShowReplanDialog] = useState(false);
+  const [replanCandidate, setReplanCandidate] = useState<ScheduledSession | null>(null);
+  const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null);
+  const [replanHandled, setReplanHandled] = useState(false);
   
   // Study program state - Default: 95 ECTS completed out of 180 (19 of 36 modules done)
   const [studyProgram, setStudyProgram] = useState<StudyProgram>({
@@ -714,22 +729,50 @@ function App() {
     selfAssessmentProgress: number;
     completedMilestones?: string[];
     newMilestones?: string[];
+    selectedCourseId?: string;
   }) => {
-    // Update the session
-    setScheduledSessions(prev => prev.map(session => 
-      session.id === feedback.sessionId 
-        ? { 
-            ...session, 
-            completed: feedback.completed,
-            completionPercentage: feedback.selfAssessmentProgress 
-          } 
-        : session
-    ));
+    // If this is an unassigned session with a selected course, assign it
+    if (feedback.selectedCourseId && feedbackSession && !feedbackSession.courseId) {
+      const updatedSession = { ...feedbackSession, courseId: feedback.selectedCourseId };
+      setFeedbackSession(updatedSession);
+      
+      // Update the session in scheduledSessions
+      setScheduledSessions(prev => prev.map(s => 
+        s.id === feedbackSession.id 
+          ? { 
+              ...updatedSession,
+              completed: feedback.completed,
+              completionPercentage: feedback.selfAssessmentProgress 
+            }
+          : s
+      ));
+
+      // Activate the course if it's in 'planned' status
+      setCourses(prev => prev.map(c => 
+        c.id === feedback.selectedCourseId && c.status === 'planned'
+          ? { ...c, status: 'active' }
+          : c
+      ));
+
+      console.log('Assigned course to unassigned session:', feedback.selectedCourseId, feedbackSession.id);
+    } else {
+      // Update the session normally (for already assigned sessions)
+      setScheduledSessions(prev => prev.map(session => 
+        session.id === feedback.sessionId 
+          ? { 
+              ...session, 
+              completed: feedback.completed,
+              completionPercentage: feedback.selfAssessmentProgress 
+            } 
+          : session
+      ));
+    }
 
     // Update course progress and milestones
     setCourses(prevCourses => {
       return prevCourses.map(course => {
-        if (feedbackSession && course.id === feedbackSession.courseId) {
+        const targetCourseId = feedback.selectedCourseId || feedbackSession?.courseId;
+        if (feedbackSession && course.id === targetCourseId) {
           const newCompletedHours = course.completedHours + feedback.completedHours;
           const newProgress = Math.round((newCompletedHours / course.estimatedHours) * 100);
           
@@ -909,30 +952,82 @@ function App() {
     setShowFeedbackDialog(true);
   };
 
-  const handleSessionNotAttended = () => {
-    // User didn't attend - mark session as completed (grayed out) with 0%
-    if (!feedbackSession) return;
-    
-    const course = courses.find(c => c.id === feedbackSession.courseId);
+  // Helper: parse local datetime
+  const parseLocalDateTime = (dateStr: string, timeStr: string) => new Date(`${dateStr}T${timeStr}`);
+
+  // Find the next unassigned study session in the future
+  const findNextUnassignedSession = (after: Date): ScheduledSession | null => {
+    const candidates = scheduledSessions
+      .filter((s) => !s.courseId && !s.completed && parseLocalDateTime(s.date, s.startTime).getTime() > after.getTime())
+      .sort((a, b) => parseLocalDateTime(a.date, a.startTime).getTime() - parseLocalDateTime(b.date, b.startTime).getTime());
+    return candidates[0] || null;
+  };
+
+  // Apply: user did not attend and does NOT want automatic replanning
+  const applyNotAttendedWithoutReplan = (session: ScheduledSession) => {
+    const course = courses.find((c) => c.id === session.courseId);
     if (!course) return;
 
-    // Update session to completed with 0 hours
-    setScheduledSessions(prev => prev.map(s => 
-      s.id === feedbackSession.id 
-        ? { ...s, completed: true, completionPercentage: 0 }
-        : s
-    ));
+    // Mark missed session completed with 0%
+    setScheduledSessions((prev) =>
+      prev.map((s) => (s.id === session.id ? { ...s, completed: true, completionPercentage: 0 } : s))
+    );
 
-    // Add scheduled hours back to open hours
-    const sessionHours = feedbackSession.durationMinutes / 60;
-    setCourses(prev => prev.map(c => 
-      c.id === feedbackSession.courseId 
-        ? { ...c, scheduledHours: Math.max(0, c.scheduledHours - sessionHours) }
-        : c
-    ));
+    // Decrease scheduled hours previously allocated
+    const sessionHours = session.durationMinutes / 60;
+    setCourses((prev) =>
+      prev.map((c) => (c.id === session.courseId ? { ...c, scheduledHours: Math.max(0, c.scheduledHours - sessionHours) } : c))
+    );
+  };
 
+  // Apply: user did not attend and WANTS automatic replanning into next unassigned session
+  const applyNotAttendedWithReplan = (session: ScheduledSession, target: ScheduledSession) => {
+    const course = courses.find((c) => c.id === session.courseId);
+    if (!course) return;
+
+    const missedHours = session.durationMinutes / 60;
+    const targetHours = target.durationMinutes / 60;
+
+    // 1) Remove the missed session AND assign the target session in a single state update
+    setScheduledSessions((prev) => 
+      prev
+        .filter((s) => s.id !== session.id) // Remove missed session
+        .map((s) => (s.id === target.id ? { ...s, courseId: session.courseId } : s)) // Assign target
+    );
+
+    // 2) Update course hours: decrease for missed, increase for target
+    setCourses((prev) =>
+      prev.map((c) => 
+        c.id === session.courseId 
+          ? { 
+              ...c, 
+              scheduledHours: c.scheduledHours - missedHours + targetHours,
+              status: c.status === 'planned' ? 'active' : c.status 
+            } 
+          : c
+      )
+    );
+  };
+
+  const handleSessionNotAttended = () => {
+    if (!feedbackSession) return;
+
+    // Determine next unassigned session
+    const now = new Date();
+    const candidate = findNextUnassignedSession(now);
+
+    // Store state for replan prompt
+    setMissedSession(feedbackSession);
+    setReplanCandidate(candidate);
+    
+    // Close attendance dialog first
     setShowAttendanceDialog(false);
     setFeedbackSession(null);
+    
+    // Open replan prompt after a delay to ensure attendance dialog overlay is fully removed
+    setTimeout(() => {
+      setShowReplanDialog(true);
+    }, 300);
   };
 
   const handleSaveSession = (sessionData: Omit<ScheduledSession, 'id'>, recurring?: { enabled: boolean }) => {
@@ -1047,7 +1142,40 @@ function App() {
   };
 
   const handleDeleteSession = (sessionId: string) => {
-    setScheduledSessions(prev => prev.filter(s => s.id !== sessionId));
+    console.log(`🗑️ App: Deleting session ${sessionId}`);
+    
+    setScheduledSessions(prev => {
+      // Check if this is an expanded instance (has underscore in ID like "master_2025-11-11")
+      // If so, we need to delete the recurring master instead
+      let targetId = sessionId;
+      const session = prev.find(s => s.id === sessionId);
+      
+      if (!session) {
+        // Session not found in state - might be an expanded instance
+        // Extract master ID by removing the date suffix
+        if (sessionId.includes('_')) {
+          const masterId = sessionId.split('_')[0];
+          const master = prev.find(s => s.id === masterId && s.recurrence);
+          if (master) {
+            console.log(`  ⚠️ Session ${sessionId} is an expanded instance. Deleting master ${masterId} instead.`);
+            targetId = masterId;
+          } else {
+            console.warn(`  ❌ Could not find master session ${masterId} for expanded instance ${sessionId}`);
+            return prev; // Don't delete anything if we can't find the master
+          }
+        } else {
+          console.warn(`  ❌ Session ${sessionId} not found in state`);
+          return prev;
+        }
+      }
+      
+      const filtered = prev.filter(s => s.id !== targetId);
+      console.log(`  Sessions after deletion: ${filtered.length} (was ${prev.length})`);
+      console.log(`  Recurring masters remaining: ${filtered.filter(s => s.recurrence).length}`);
+      console.log(`  Expanded instances remaining (should be 0): ${filtered.filter(s => s.recurringEventId && !s.recurrence).length}`);
+      return filtered;
+    });
+    
     // Clear state and close dialog
     setOriginalSessionBeforeMove(null);
     setEditingSession(undefined);
@@ -1058,50 +1186,113 @@ function App() {
   };
 
   // Handle sessions imported from Google Calendar
-  const handleSessionsImported = (importedSessions: ScheduledSession[]) => {
+  const handleSessionsImported = (importedSessions: ScheduledSession[], syncStartTime?: number) => {
     console.log('📥 App: Importing sessions from Google Calendar:', importedSessions.length);
     
-    // Trust the sync function completely - it already performed the correct merge
-    // including handling new local sessions, deletions, and updates
-    // Simply replace all sessions with the merged result
-    console.log('� App: Replacing all sessions with synced result');
-    // Deduplicate sessions before setting state
-    const ids = importedSessions.map(s => s.id);
-    const hasDuplicates = ids.some((id, index) => ids.indexOf(id) !== index);
-    let finalSessions = importedSessions;
+    // Track if any changes were made during sync (need to re-sync)
+    let hasChangesDuringSync = false;
     
-    if (hasDuplicates) {
-      console.warn('Duplicate session IDs detected, deduplicating...');
+    // To prevent race conditions where sessions are added during sync:
+    // 1. Get current app state (which may include new sessions added during sync)
+    // 2. Merge synced sessions with any new local sessions not yet synced
+  setScheduledSessions(currentSessions => {
+      console.log('🔁 App: Merging synced sessions with current app state');
+      console.log('  Current sessions in app:', currentSessions.length);
+      console.log('  Current recurring masters:', currentSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
+      console.log('  Current expanded instances:', currentSessions.filter(s => s.recurringEventId && !s.recurrence).map(s => ({ id: s.id, masterId: s.recurringEventId })));
+      console.log('  Synced sessions from Google:', importedSessions.length);
+      console.log('  Synced recurring masters:', importedSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
+      
+      // Build maps for efficient lookup
+      const syncedById = new Map(importedSessions.map(s => [s.id, s]));
+      const currentById = new Map(currentSessions.map(s => [s.id, s]));
+      
+      // CRITICAL: Merge local and synced sessions with conflict resolution
+      // Strategy: For each session ID, choose the version with the newer lastModified timestamp
       const sessionById = new Map<string, ScheduledSession>();
-      for (const s of importedSessions) {
-        const existing = sessionById.get(s.id);
-        if (!existing || (s.lastModified || 0) > (existing.lastModified || 0)) {
-          sessionById.set(s.id, s);
+      
+      // First, add all synced sessions (authoritative from server)
+      for (const syncedSession of importedSessions) {
+        sessionById.set(syncedSession.id, syncedSession);
+      }
+      
+      // Then, check current sessions for conflicts or new additions
+      for (const [id, currentSession] of currentById) {
+        const syncedSession = syncedById.get(id);
+        
+        // Skip expanded instances - they're generated from recurring masters
+        if (currentSession.recurringEventId && !currentSession.recurrence) {
+          console.log(`⏭️ Skipping expanded instance ${id} (generated from recurring master ${currentSession.recurringEventId})`);
+          continue;
+        }
+        
+        if (syncedSession) {
+          // Session exists in both - resolve conflict by timestamp
+          const currentMod = currentSession.lastModified || 0;
+          const syncedMod = syncedSession.lastModified || 0;
+          
+          if (syncStartTime && currentMod > syncStartTime) {
+            // Local session was modified DURING the sync - prefer local (user's latest change)
+            console.log(`🔄 Conflict: Session ${id} modified during sync - preserving local changes (local: ${new Date(currentMod).toISOString()}, synced: ${new Date(syncedMod).toISOString()})`);
+            sessionById.set(id, currentSession);
+            hasChangesDuringSync = true; // Mark for re-sync
+          } else if (syncedMod > currentMod) {
+            // Synced version is newer - already in map, do nothing
+            console.log(`✅ Using synced version of ${id} (newer: synced ${new Date(syncedMod).toISOString()} > local ${new Date(currentMod).toISOString()})`);
+          } else {
+            // Local version is newer but wasn't modified during sync - prefer local
+            console.log(`✅ Using local version of ${id} (newer: local ${new Date(currentMod).toISOString()} > synced ${new Date(syncedMod).toISOString()})`);
+            sessionById.set(id, currentSession);
+          }
+        } else {
+          // Session only in current state (not in sync result)
+          const currentMod = currentSession.lastModified || 0;
+          if (syncStartTime && currentMod > syncStartTime) {
+            // Created during sync - add it
+            console.log(`➕ Preserving local session ${id} created during sync`);
+            sessionById.set(id, currentSession);
+            hasChangesDuringSync = true; // Mark for re-sync
+          } else {
+            // Old session not in sync result - was deleted
+            console.log(`⏭️ Skipping local session ${id} - not in sync result (likely deleted)`);
+          }
         }
       }
-      finalSessions = Array.from(sessionById.values());
-    }
-    
-    // Recalculate scheduledHours for all courses based on the synced sessions
-    console.log('🔄 Recalculating scheduled hours for all courses...');
-    const scheduledHoursByCourse = new Map<string, number>();
-    
-    for (const session of finalSessions) {
-      // Skip unassigned sessions (blockers) - they don't count toward course hours
-      if (!session.courseId) continue;
       
-      const hours = session.durationMinutes / 60;
-      const current = scheduledHoursByCourse.get(session.courseId) || 0;
-      scheduledHoursByCourse.set(session.courseId, current + hours);
-    }
+      const finalSessions = Array.from(sessionById.values());
+      
+      console.log('  Final merged sessions:', finalSessions.length);
+      console.log('  Final recurring masters:', finalSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
+      console.log('  Final expanded instances (should be 0):', finalSessions.filter(s => s.recurringEventId && !s.recurrence).length);
+      
+      // Recalculate scheduledHours for all courses based on merged sessions
+      console.log('🔄 Recalculating scheduled hours for all courses...');
+      const scheduledHoursByCourse = new Map<string, number>();
+      
+      for (const session of finalSessions) {
+        // Skip unassigned sessions (blockers) - they don't count toward course hours
+        if (!session.courseId) continue;
+        
+        const hours = session.durationMinutes / 60;
+        const current = scheduledHoursByCourse.get(session.courseId) || 0;
+        scheduledHoursByCourse.set(session.courseId, current + hours);
+      }
+      
+      // Update courses with recalculated scheduled hours
+      setCourses(prevCourses => prevCourses.map(course => ({
+        ...course,
+        scheduledHours: scheduledHoursByCourse.get(course.id) || 0
+      })));
+      
+      return finalSessions;
+    });
     
-    // Update courses with recalculated scheduled hours
-    setCourses(prevCourses => prevCourses.map(course => ({
-      ...course,
-      scheduledHours: scheduledHoursByCourse.get(course.id) || 0
-    })));
-    
-    setScheduledSessions(finalSessions);
+      // If changes were made during sync, trigger another sync immediately
+      if (hasChangesDuringSync) {
+        console.log('🔄 Changes detected during sync - triggering follow-up sync to push local changes');
+        // Increment autoSyncTrigger to trigger the GoogleCalendarSyncService
+        setAutoSyncTrigger(prev => prev + 1);
+      }
   };
 
   // Drag to create session from calendar
@@ -1221,9 +1412,97 @@ function App() {
         }}
         session={feedbackSession}
         course={feedbackSession ? courses.find(c => c.id === feedbackSession.courseId) || null : null}
+        courses={courses}
         onSubmit={handleSessionFeedback}
+        onCreateNewCourse={() => {
+          setShowFeedbackDialog(false);
+          setShowCourseDialog(true);
+        }}
         skipAttendanceQuestion={true}
       />
+
+      {/* Replan missed session prompt */}
+      <AlertDialog
+        open={showReplanDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            // If the dialog is being closed without an explicit choice, apply default: mark as not attended
+            if (missedSession && !replanHandled) {
+              applyNotAttendedWithoutReplan(missedSession);
+            }
+            setShowReplanDialog(false);
+            setMissedSession(null);
+            setReplanCandidate(null);
+            setReplanHandled(false);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Session nicht wahrgenommen</AlertDialogTitle>
+            {/* Hidden description for accessibility; visual text kept below for layout flexibility */}
+            <AlertDialogDescription className="sr-only">
+              Dialog zur Behandlung einer nicht wahrgenommenen Session und optionaler automatischer Neuplanung.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="text-sm text-gray-700 space-y-2">
+            {replanCandidate ? (
+              <p>
+                Möchtest du die verpasste Session automatisch in die nächste nicht zugewiesene Study Session verschieben?<br />
+                Vorschlag: {new Date(`${replanCandidate.date}T${replanCandidate.startTime}`).toLocaleString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            ) : (
+              <p>
+                Es wurde keine zukünftige, nicht zugewiesene Study Session gefunden. Lege in deinem Kalender freie
+                <span className="font-medium"> "📚 Study Session"</span>-Slots an – dann kann die App verpasste Sessions automatisch dorthin verschieben.
+              </p>
+            )}
+          </div>
+          <AlertDialogFooter>
+            {replanCandidate ? (
+              <>
+                <AlertDialogCancel
+                  onClick={() => {
+                    if (missedSession) {
+                      applyNotAttendedWithoutReplan(missedSession);
+                    }
+                    setReplanHandled(true);
+                    setShowReplanDialog(false);
+                  }}
+                  className="border-gray-300 hover:border-gray-400"
+                >
+                  Nur markieren
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (missedSession && replanCandidate) {
+                      applyNotAttendedWithReplan(missedSession, replanCandidate);
+                    }
+                    setReplanHandled(true);
+                    setShowReplanDialog(false);
+                  }}
+                  className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md border border-gray-700"
+                >
+                  Ja, neu einplanen
+                </AlertDialogAction>
+              </>
+            ) : (
+              <AlertDialogAction
+                onClick={() => {
+                  if (missedSession) {
+                    applyNotAttendedWithoutReplan(missedSession);
+                  }
+                  setReplanHandled(true);
+                  setShowReplanDialog(false);
+                }}
+                className="bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md border border-gray-700"
+              >
+                OK
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <CourseDialog
         open={showCourseDialog}
@@ -1292,7 +1571,7 @@ function App() {
             autoSyncTrigger={autoSyncTrigger}
             previewSession={previewSession}
             editingSessionId={editingSession?.id}
-            isDialogOpen={showSessionDialog}
+            isDialogOpen={showSessionDialog || showAttendanceDialog || showFeedbackDialog || showPastSessionsReview || showCourseDialog || showBlockDialog || showReplanDialog}
           />
         )}
 

@@ -1,7 +1,7 @@
 {
   "name": "intelligent-study-planner",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -54,6 +54,7 @@
     "react-hook-form": "^7.66.0",
     "react-resizable-panels": "^3.0.6",
     "recharts": "^3.3.0",
+    "rrule": "^2.8.1",
     "sonner": "^2.0.3",
     "tailwind-merge": "^3.3.1",
     "vaul": "^1.1.2"

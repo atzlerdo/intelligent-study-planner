@@ -24,7 +24,7 @@ interface DashboardProps {
   isDialogOpen?: boolean;
 }
 
-export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, editingSessionId, isDialogOpen }: DashboardProps) {
+export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, /* previewSession unused with FullCalendar */ /* editingSessionId unused */ isDialogOpen }: DashboardProps) {
   // Filter for active courses only
   const activeCourses = courses.filter(c => c.status === 'active');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
@@ -89,17 +89,24 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                       
                       {/* Scheduled portion - Yellow */}
                       {(() => {
-                        const actualWidth = (scheduledHours / (studyProgram.totalECTS * studyProgram.hoursPerECTS)) * 100;
-                        const minWidth = actualWidth > 0 ? 12 : 0;
-                        const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
-                        return (
-                          <div 
+                        const totalHours = studyProgram.totalECTS * studyProgram.hoursPerECTS;
+                        const actualWidthPct = (scheduledHours / totalHours) * 100;
+                        const label = `${Math.round(scheduledHours)}h`;
+                        // Estimate minimal pixel width needed for label (approx character width * chars + padding)
+                        const labelCharWidth = 6; // rough average for text-xs
+                        const labelPadding = 12; // px (left+right)
+                        const minPixelWidth = (label.length * labelCharWidth) + labelPadding;
+                        return actualWidthPct > 0 ? (
+                          <div
                             className="h-full bg-yellow-400 transition-all flex items-center justify-center"
-                            style={{ width: `${displayWidth}%` }}
+                            style={{ 
+                              width: `${actualWidthPct}%`,
+                              minWidth: `${minPixelWidth}px`
+                            }}
                           >
-                            <span className="text-xs text-gray-900 px-2 truncate">{Math.round(scheduledHours)}h</span>
+                            <span className="text-xs text-gray-900 px-2 whitespace-nowrap">{label}</span>
                           </div>
-                        );
+                        ) : null;
                       })()}
                       
                       {/* Remaining portion - Gray */}
@@ -226,16 +233,21 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                               
                               {/* Scheduled hours - Yellow */}
                               {(() => {
-                                const actualWidth = (course.scheduledHours / course.estimatedHours) * 100;
-                                const minWidth = actualWidth > 0 ? 12 : 0;
-                                const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
-                                return displayWidth > 0 ? (
-                                  <div 
+                                const actualWidthPct = (course.scheduledHours / course.estimatedHours) * 100;
+                                const label = `${Math.round(course.scheduledHours)}h`;
+                                const labelCharWidth = 6;
+                                const labelPadding = 10;
+                                const minPixelWidth = (label.length * labelCharWidth) + labelPadding;
+                                return actualWidthPct > 0 ? (
+                                  <div
                                     className="h-full bg-yellow-400 transition-all flex items-center justify-center"
-                                    style={{ width: `${displayWidth}%` }}
+                                    style={{ 
+                                      width: `${actualWidthPct}%`,
+                                      minWidth: `${minPixelWidth}px`
+                                    }}
                                   >
-                                    <span className="text-xs text-gray-900 px-2 truncate">
-                                      {Math.round(course.scheduledHours)}h
+                                    <span className="text-xs text-gray-900 px-2 whitespace-nowrap">
+                                      {label}
                                     </span>
                                   </div>
                                 ) : null;
@@ -331,8 +343,8 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
               onSessionMove={onSessionMove}
               onSessionsImported={onSessionsImported}
               autoSyncTrigger={autoSyncTrigger}
-              previewSession={previewSession}
-              editingSessionId={editingSessionId}
+              previewSession={undefined}
+              editingSessionId={undefined}
               isDialogOpen={isDialogOpen}
             />
           </div>

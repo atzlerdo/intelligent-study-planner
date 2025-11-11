@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog';
 import { Button } from '../ui/button';
 import type { ScheduledSession, Course } from '../../types';
 import { Check, X } from 'lucide-react';
@@ -20,7 +20,7 @@ export function SessionAttendanceDialog({
   onAttended,
   onNotAttended
 }: SessionAttendanceDialogProps) {
-  if (!session || !course) return null;
+  if (!session) return null;
 
   const sessionDate = new Date(session.date);
   const formattedDate = sessionDate.toLocaleDateString('de-DE', { 
@@ -32,16 +32,16 @@ export function SessionAttendanceDialog({
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        <DialogHeader>
-          <DialogTitle>Session-Teilnahme</DialogTitle>
-          <DialogDescription>
-            Bestätige, ob du an dieser Lernsession teilgenommen hast.
-          </DialogDescription>
-        </DialogHeader>
-        
-        <div className="space-y-4">
+        {/* Accessible hidden title/description for Radix */}
+        <DialogTitle className="sr-only">Session Anwesenheit bestätigen</DialogTitle>
+        <DialogDescription className="sr-only">
+          Bestätige ob du die ausgewählte Session wahrgenommen hast.
+        </DialogDescription>
+        <div className="space-y-4" aria-labelledby="dialog-title" aria-describedby="dialog-description">
           <div className="text-center space-y-2">
-            <h3 className="text-lg">{course.name}</h3>
+            <h3 className="text-lg">
+              {course ? course.name : '📚 Study Session'}
+            </h3>
             <p className="text-sm text-gray-600">{formattedDate}</p>
             <p className="text-sm text-gray-600">
               {session.startTime} - {session.endTime} Uhr ({session.durationMinutes} Min.)
@@ -49,8 +49,7 @@ export function SessionAttendanceDialog({
           </div>
 
           <div className="text-center pt-4">
-            <p className="mb-4">Hast du an dieser Session teilgenommen?</p>
-            
+            <p className="mb-4">Hast du diese Session (anteilig) wahrgenommen?</p>
             <div className="flex gap-3 justify-center">
               <Button
                 onClick={onNotAttended}
@@ -61,7 +60,6 @@ export function SessionAttendanceDialog({
                 <X className="w-8 h-8 text-red-500" />
                 <span>Nein</span>
               </Button>
-              
               <Button
                 onClick={onAttended}
                 variant="default"

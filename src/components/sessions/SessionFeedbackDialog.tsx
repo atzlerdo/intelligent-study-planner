@@ -8,6 +8,7 @@ import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Input } from '../ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import type { ScheduledSession, Course } from '../../types';
 
 interface SessionFeedbackDialogProps {
@@ -15,6 +16,7 @@ interface SessionFeedbackDialogProps {
   onClose: () => void;
   session: ScheduledSession | null;
   course: Course | null;
+  courses: Course[]; // All available courses for unassigned sessions
   onSubmit: (feedback: { 
     sessionId: string; 
     completed: boolean; 
@@ -22,7 +24,9 @@ interface SessionFeedbackDialogProps {
     selfAssessmentProgress: number;
     completedMilestones?: string[];
     newMilestones?: string[];
+    selectedCourseId?: string; // For unassigned sessions
   }) => void;
+  onCreateNewCourse?: () => void; // Callback to open course creation dialog
   skipAttendanceQuestion?: boolean; // Skip the "Did you attend?" question
 }
 
@@ -31,7 +35,9 @@ export function SessionFeedbackDialog({
   onClose, 
   session,
   course,
+  courses,
   onSubmit,
+  onCreateNewCourse,
   skipAttendanceQuestion = false
 }: SessionFeedbackDialogProps) {
   // Calculate initial values
@@ -44,6 +50,7 @@ export function SessionFeedbackDialog({
     return Math.min(Math.round((hoursSpent / totalPlanned) * 100), 100);
   };
 
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [completed, setCompleted] = useState(true);
   const [completedHours, setCompletedHours] = useState(getInitialHours());
   const [showMilestones, setShowMilestones] = useState(false);
@@ -52,9 +59,12 @@ export function SessionFeedbackDialog({
   const [newMilestones, setNewMilestones] = useState<string[]>([]);
   const [selfAssessmentProgress, setSelfAssessmentProgress] = useState(calculateInitialProgress());
 
+  const isUnassigned = !course;
+  const selectedCourse = isUnassigned ? courses.find(c => c.id === selectedCourseId) : course;
+
   // Reset form when session changes
   useEffect(() => {
-    if (session && course) {
+    if (session) {
       const initialHours = session.durationMinutes / 60;
       setCompletedHours(initialHours);
       setCompleted(true);
@@ -62,12 +72,15 @@ export function SessionFeedbackDialog({
       setCompletedMilestoneIds(new Set());
       setNewMilestones([]);
       setNewMilestoneTitle('');
+      setSelectedCourseId('');
       
-      // Recalculate progress
-      const hoursSpent = course.completedHours + initialHours;
-      const totalPlanned = course.estimatedHours;
-      const progress = Math.min(Math.round((hoursSpent / totalPlanned) * 100), 100);
-      setSelfAssessmentProgress(progress);
+      // Recalculate progress if course exists
+      if (course) {
+        const hoursSpent = course.completedHours + initialHours;
+        const totalPlanned = course.estimatedHours;
+        const progress = Math.min(Math.round((hoursSpent / totalPlanned) * 100), 100);
+        setSelfAssessmentProgress(progress);
+      }
     }
   }, [session, course]);
 
@@ -81,6 +94,7 @@ export function SessionFeedbackDialog({
       selfAssessmentProgress,
       completedMilestones: Array.from(completedMilestoneIds),
       newMilestones: newMilestones.length > 0 ? newMilestones : undefined,
+      selectedCourseId: isUnassigned ? selectedCourseId : undefined,
     });
     
     // Reset form
@@ -90,6 +104,7 @@ export function SessionFeedbackDialog({
     setCompletedMilestoneIds(new Set());
     setNewMilestones([]);
     setNewMilestoneTitle('');
+    setSelectedCourseId('');
   };
 
   const toggleMilestone = (milestoneId: string) => {
@@ -115,13 +130,16 @@ export function SessionFeedbackDialog({
     setNewMilestones(prev => prev.filter((_, i) => i !== index));
   };
 
-  if (!session || !course) {
+  if (!session) {
     return null;
   }
 
   const sessionDurationHours = session.durationMinutes / 60;
-  const hoursSpent = course.completedHours;
-  const totalPlanned = course.estimatedHours;
+  const hoursSpent = selectedCourse?.completedHours || 0;
+  const totalPlanned = selectedCourse?.estimatedHours || 1;
+
+  // Disable submit if unassigned session without course selection
+  const canSubmit = !isUnassigned || selectedCourseId.length > 0;
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -149,10 +167,51 @@ export function SessionFeedbackDialog({
         </DialogHeader>
         
         <div className="space-y-4 py-4">
+          {/* Course selection for unassigned sessions */}
+          {isUnassigned && (
+            <div className="p-4 border rounded-lg space-y-3">
+              <Label className="text-sm font-medium text-gray-900">
+                Für welchen Kurs hast du die Zeit genutzt? *
+              </Label>
+              <Select value={selectedCourseId} onValueChange={setSelectedCourseId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Kurs auswählen..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {courses
+                    .filter(c => c.status !== 'completed')
+                    .map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} ({c.semester}. Semester)
+                      </SelectItem>
+                    ))}
+                  {onCreateNewCourse && (
+                    <>
+                      <div className="relative flex cursor-default items-center border-t border-gray-200 my-1" />
+                      <div
+                        className="relative flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-gray-100 data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          onCreateNewCourse();
+                          onClose();
+                        }}
+                      >
+                        <Plus className="w-4 h-4 mr-2" />
+                        <span>Neuen Kurs erstellen</span>
+                      </div>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="p-4 border rounded-lg space-y-4">
             <div className="flex justify-between items-start">
               <div>
-                <div className="text-gray-900">{course.name}</div>
+                <div className="text-gray-900">
+                  {selectedCourse ? selectedCourse.name : '📚 Study Session'}
+                </div>
                 <div className="text-sm text-gray-500">
                   {new Date(session.date).toLocaleDateString('de-DE', { 
                     weekday: 'long', 
@@ -229,14 +288,16 @@ export function SessionFeedbackDialog({
                       {selfAssessmentProgress}%
                     </span>
                   </div>
-                  <Slider
-                    value={[selfAssessmentProgress]}
-                    onValueChange={(value) => setSelfAssessmentProgress(value[0])}
-                    min={0}
-                    max={100}
-                    step={5}
-                    className="w-full"
-                  />
+                  <div className="py-2">
+                    <Slider
+                      value={[selfAssessmentProgress]}
+                      onValueChange={(value) => setSelfAssessmentProgress(value[0])}
+                      min={0}
+                      max={100}
+                      step={5}
+                      className="w-full [&_[data-slot=slider-track]]:h-3 [&_[data-slot=slider-track]]:bg-gray-200 [&_[data-slot=slider-range]]:bg-gradient-to-r [&_[data-slot=slider-range]]:from-blue-500 [&_[data-slot=slider-range]]:to-green-500 [&_[data-slot=slider-thumb]]:size-5 [&_[data-slot=slider-thumb]]:border-2 [&_[data-slot=slider-thumb]]:border-blue-600 [&_[data-slot=slider-thumb]]:bg-white"
+                    />
+                  </div>
                   <div className="flex justify-between text-xs text-gray-500">
                     <span>Noch nichts</span>
                     <span>Prüfungsreif</span>
@@ -269,9 +330,9 @@ export function SessionFeedbackDialog({
                     </div>
                     
                     {/* Existing milestones */}
-                    {course.milestones && course.milestones.length > 0 && (
+                    {selectedCourse?.milestones && selectedCourse.milestones.length > 0 && (
                       <div className="space-y-2">
-                        {course.milestones.map(milestone => (
+                        {selectedCourse.milestones.map(milestone => (
                           <div key={milestone.id} className="flex items-center space-x-2 bg-white p-2 rounded">
                             <Checkbox
                               id={`milestone-${milestone.id}`}
@@ -353,7 +414,11 @@ export function SessionFeedbackDialog({
           <Button variant="outline" onClick={onClose} className="flex-1">
             Abbrechen
           </Button>
-          <Button onClick={handleSubmit} className="flex-1 bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md">
+          <Button 
+            onClick={handleSubmit} 
+            disabled={!canSubmit}
+            className="flex-1 bg-gray-900 text-white hover:bg-gray-800 font-semibold shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Speichern
           </Button>
         </DialogFooter>
