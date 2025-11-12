@@ -200,7 +200,7 @@ export function RecurrencePatternPicker({ value, onChange, startDate }: Recurren
   );
 }
 
-export function buildRRuleString(pattern: RecurrencePattern, _dtstart: string): string {
+export function buildRRuleString(pattern: RecurrencePattern): string {
   const parts: string[] = [`FREQ=${pattern.frequency}`];
   
   if (pattern.interval > 1) {
@@ -228,7 +228,7 @@ export function buildRRuleString(pattern: RecurrencePattern, _dtstart: string): 
   return parts.join(';');
 }
 
-export function parseRRuleString(rrule: string, _dtstart: string): RecurrencePattern | null {
+export function parseRRuleString(rrule: string): RecurrencePattern | null {
   try {
     const parts = rrule.split(';');
     const pattern: Partial<RecurrencePattern> = {
@@ -253,12 +253,13 @@ export function parseRRuleString(rrule: string, _dtstart: string): RecurrencePat
         case 'BYMONTHDAY':
           pattern.byMonthDay = parseInt(value);
           break;
-        case 'UNTIL':
+        case 'UNTIL': {
           pattern.endType = 'until';
           // Convert YYYYMMDDTHHMMSSZ to YYYY-MM-DD
           const untilStr = value.replace(/T.*$/, '');
           pattern.until = `${untilStr.slice(0, 4)}-${untilStr.slice(4, 6)}-${untilStr.slice(6, 8)}`;
           break;
+        }
         case 'COUNT':
           pattern.endType = 'count';
           pattern.count = parseInt(value);

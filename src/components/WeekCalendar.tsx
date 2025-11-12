@@ -298,7 +298,9 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         recurringMasters: recurringCount,
         outputInstances: result.length
       });
-    } catch {}
+    } catch {
+      // ignore debug logging errors in expansion
+    }
     return result;
   }, [sessions, weekStart, weekEnd]);
   const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -366,7 +368,9 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         count: filteredSessions.length,
         ids: filteredSessions.map(s => s.id)
       });
-    } catch {}
+    } catch {
+      // Ignore debug logging errors
+    }
     
     return filteredSessions;
   };
@@ -1259,7 +1263,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                               const now = new Date();
                               needsEvaluation = sessionEndDate.getTime() < now.getTime();
                             } catch {
-                              console.error('Error parsing session time:', session);
+                              // If parsing fails, fail open (leave without evaluation flag)
                             }
                           }
                           const keyPrefix = isPreview ? 'preview' : 'session';

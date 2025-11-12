@@ -508,7 +508,8 @@ export async function syncSessionsToGoogleCalendar(
   const now = new Date();
   const timeMin = new Date(now.getTime() - IMPORT_PAST_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const timeMax = new Date(now.getTime() + IMPORT_FUTURE_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const existingEvents = await listAllEvents(calendarId, accessToken, { timeMin, timeMax, fields: 'items(id,extendedProperties/private),nextPageToken', singleEvents: true });
+    // Use singleEvents: false to get recurring masters, not expanded instances
+    const existingEvents = await listAllEvents(calendarId, accessToken, { timeMin, timeMax, fields: 'items(id,extendedProperties/private,recurrence),nextPageToken', singleEvents: false });
     
     // Build lookup maps for existing events
     const existingEventsBySessionId = new Map();
@@ -656,21 +657,10 @@ export async function syncSessionsToGoogleCalendar(
     
     console.log(`🔍 Checking for events to delete. Current sessions in app: ${Array.from(currentSessionIds).join(', ')}`);
     
-  // Check all events in Google Calendar
+  // Check all events in Google Calendar (now only masters, not expanded instances)
     for (const event of existingEvents) {
       const googleEventId = (event as any).id;
       const sessionIdProperty = (event as any).extendedProperties?.private?.sessionId;
-      
-      // If this is an instance of a recurring event (Google uses id like "<masterId>_<ISO>"),
-      // and the master series exists in our app state, do NOT delete the instance.
-      if (googleEventId && googleEventId.includes('_')) {
-        const masterId = googleEventId.split('_')[0];
-        if (currentSessionIds.has(masterId)) {
-          // Skip deletion for recurring instances; they are represented by the master series in app state
-          console.log(`  Skipping recurring instance ${googleEventId} (master ${masterId} exists in app)`);
-          continue;
-        }
-      }
       
       // Determine if this event should exist based on our app's sessions
       // Check both the sessionId property (for app-created events) and the Google event ID directly (for Google-imported events)
@@ -1357,7 +1347,7 @@ export async function performTwoWaySync(
           if (stored) {
             Object.assign(recentlyDeleted, JSON.parse(stored));
           }
-        } catch (e) {
+        } catch {
           // Ignore parse errors
         }
         

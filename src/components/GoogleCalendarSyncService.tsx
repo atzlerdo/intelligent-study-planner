@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
+import { getGoogleCalendarToken, deleteGoogleCalendarToken, updateLastSync } from '../lib/api';
 
 interface GoogleCalendarSyncServiceProps {
   sessions: ScheduledSession[];
@@ -21,15 +22,37 @@ export function GoogleCalendarSyncService({
   autoSyncTrigger,
   onStateChange,
 }: GoogleCalendarSyncServiceProps) {
-  const [accessToken, setAccessToken] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('googleCalendarAccessToken');
-    } catch {
-      return null;
-    }
-  });
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const isConnected = !!accessToken;
+
+  // Load token from backend on mount
+  useEffect(() => {
+    const loadToken = async () => {
+      try {
+        const tokenData = await getGoogleCalendarToken();
+        if (tokenData) {
+          setAccessToken(tokenData.accessToken);
+        }
+      } catch (error) {
+        // Silently handle 404 (no token) to avoid console spam
+        if (error instanceof Error && !error.message.includes('404')) {
+          console.error('Failed to load Google Calendar token:', error);
+        }
+      }
+    };
+    loadToken();
+
+    // Listen for custom event when token is connected/disconnected
+    const handleTokenChange = () => {
+      loadToken();
+    };
+    window.addEventListener('googleCalendarTokenChanged', handleTokenChange);
+    
+    return () => {
+      window.removeEventListener('googleCalendarTokenChanged', handleTokenChange);
+    };
+  }, []);
 
   // Notify parent about state changes
   useEffect(() => {
@@ -38,33 +61,6 @@ export function GoogleCalendarSyncService({
     }
   }, [isConnected, isSyncing, onStateChange]);
 
-  // Listen for token changes in localStorage (set by CalendarSync component)
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'googleCalendarAccessToken') {
-        setAccessToken(e.newValue);
-      }
-    };
-
-    // Also poll localStorage periodically in case the storage event doesn't fire
-    const interval = setInterval(() => {
-      try {
-        const currentToken = localStorage.getItem('googleCalendarAccessToken');
-        if (currentToken !== accessToken) {
-          setAccessToken(currentToken);
-        }
-      } catch (e) {
-        console.error('Failed to check access token:', e);
-      }
-    }, 1000);
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, [accessToken]);
-
   const handleSync = async () => {
     if (!accessToken || isSyncing) return;
 
@@ -72,26 +68,25 @@ export function GoogleCalendarSyncService({
     try {
       const tokenCheck = await validateAccessToken(accessToken);
       if (!tokenCheck.valid) {
-        console.error('Token invalid, clearing stored token');
-        localStorage.removeItem('googleCalendarAccessToken');
+        console.error('Token invalid, disconnecting from backend');
+        await deleteGoogleCalendarToken();
         setAccessToken(null);
         setIsSyncing(false);
         return;
       }
 
-      const syncStartTime = Date.now();
       const result = await performTwoWaySync(sessions, courses, accessToken);
 
       if (result.success) {
-        const syncTime = new Date();
         try {
-          localStorage.setItem('googleCalendarLastSync', syncTime.toISOString());
+          await updateLastSync();
         } catch (e) {
-          console.error('Failed to persist last sync time:', e);
+          console.error('Failed to update last sync time:', e);
         }
 
         if (result.importedFromCalendar.length > 0 && onSessionsImported) {
-          onSessionsImported(result.importedFromCalendar, syncStartTime);
+          // Pass only sessions to keep prop signature (syncStartTime used internally if needed)
+          onSessionsImported(result.importedFromCalendar);
         }
       } else {
         console.error('Sync failed:', result.error);

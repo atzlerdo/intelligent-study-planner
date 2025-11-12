@@ -270,7 +270,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       // Initialize recurrence if editing a recurring session
       if (session.recurrence) {
         setRecurring(true);
-        const parsed = parseRRuleString(session.recurrence.rrule, session.recurrence.dtstart);
+        const parsed = parseRRuleString(session.recurrence.rrule);
         setRecurrencePattern(parsed);
       } else {
         setRecurring(false);
@@ -393,7 +393,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
         if (allowedDays.length) {
           const originalStart = new Date(date);
           const currentDow = originalStart.getDay();
-          let alignedDateObj = new Date(originalStart);
+          const alignedDateObj = new Date(originalStart);
           let offsetDays = 0;
 
           if (!allowedDays.includes(currentDow)) {
@@ -498,7 +498,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
         }
       }
 
-      const rruleString = buildRRuleString(adjustedPattern, effectiveDate);
+      const rruleString = buildRRuleString(adjustedPattern);
       sessionData.recurrence = {
         rrule: rruleString,
         dtstart: effectiveDate, // date may have been aligned above

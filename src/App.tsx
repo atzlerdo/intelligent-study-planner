@@ -21,8 +21,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './components/ui/alert-dialog';
-import type { Course, StudyBlock, StudyProgram, ScheduledSession } from './types';
-import { calculateWeeklyAvailableMinutes, generateSchedule, calculateEstimatedEndDate, calculateDuration } from './lib/scheduler';
+import type { Course, StudyBlock, StudyProgram, ScheduledSession } from './types/index';
+import { isAuthenticated, migrateIfEmpty, logout, createCourse as apiCreateCourse, updateCourse as apiUpdateCourse, deleteCourse as apiDeleteCourse, createSession as apiCreateSession, updateSession as apiUpdateSession, deleteSession as apiDeleteSession, getCourses as apiGetCourses, getSessions as apiGetSessions, getStudyProgram as apiGetStudyProgram, updateStudyProgram as apiUpdateStudyProgram } from './lib/api';
+import type { AuthResponse } from './lib/api';
+import { AuthScreen } from './components/auth/AuthScreen';
+import { calculateWeeklyAvailableMinutes, calculateEstimatedEndDate, calculateDuration } from './lib/scheduler';
 import { generateMockSessions } from './lib/mockSessions';
 
 function App() {
@@ -38,12 +41,13 @@ function App() {
   const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null);
   const [replanHandled, setReplanHandled] = useState(false);
   
-  // Study program state - Default: 95 ECTS completed out of 180 (19 of 36 modules done)
+  // Study program state (loaded from backend; fallback defaults used until fetched)
   const [studyProgram, setStudyProgram] = useState<StudyProgram>({
     totalECTS: 180,
-    completedECTS: 90,
+    completedECTS: 0,
     hoursPerECTS: 27.5,
   });
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   // Trigger sync when dashboard view is shown
   useEffect(() => {
@@ -52,48 +56,29 @@ function App() {
     }
   }, [currentView]);
 
-  // Check if onboarding is needed on first load
+  // Initial client-only onboarding check removed; handled after auth per user
   useEffect(() => {
-    const hasOnboarded = localStorage.getItem('hasOnboarded');
-    if (!hasOnboarded) {
-      setShowOnboarding(true);
-    } else {
-      // Load study program from localStorage if available
-      const savedProgram = localStorage.getItem('studyProgram');
-      if (savedProgram) {
-        const parsed = JSON.parse(savedProgram);
-        // Ensure we have at least the default values if localStorage is corrupted
-        if (parsed.completedECTS === 0 && parsed.totalECTS === 180) {
-          // Override with real study progress
-          setStudyProgram({
-            totalECTS: 180,
-            completedECTS: 90,
-            hoursPerECTS: 27.5,
-          });
-          localStorage.setItem('studyProgram', JSON.stringify({
-            totalECTS: 180,
-            completedECTS: 90,
-            hoursPerECTS: 27.5,
-          }));
-        } else {
-          setStudyProgram(parsed);
-        }
-      }
-      // Show past sessions review dialog after onboarding
-      setShowPastSessionsReview(true);
-    }
+    // no-op, reserved for future non-auth initialization
   }, []);
 
-  const handleOnboardingComplete = (program: StudyProgram) => {
-    setStudyProgram(program);
-    localStorage.setItem('hasOnboarded', 'true');
-    localStorage.setItem('studyProgram', JSON.stringify(program));
+  const handleOnboardingComplete = async (program: StudyProgram) => {
+    try {
+      const updated = await apiUpdateStudyProgram({
+        totalECTS: program.totalECTS,
+        completedECTS: program.completedECTS,
+        hoursPerECTS: program.hoursPerECTS,
+      });
+      setStudyProgram(updated);
+      if (currentUserId) localStorage.setItem(`hasOnboarded:${currentUserId}`, 'true');
+    } catch (e) {
+      console.error('Failed updating study program', e);
+    }
     setShowOnboarding(false);
     setShowPastSessionsReview(true);
   };
 
-  // Course management state - Based on provided study plan
-  const [courses, setCourses] = useState<Course[]>([
+  // Legacy initial courses (used only for first-time migration to backend)
+  const legacyInitialCourses: Course[] = [
     // SEMESTER 1 - Completed Courses
     {
       id: 'course-1-1',
@@ -644,7 +629,10 @@ function App() {
       createdAt: '2025-10-24',
       semester: 6,
     },
-  ]);
+  ];
+
+  // Course state (empty until loaded from backend or migrated)
+  const [courses, setCourses] = useState<Course[]>([]);
 
   // Study blocks state
   const [studyBlocks, setStudyBlocks] = useState<StudyBlock[]>([
@@ -683,8 +671,41 @@ function App() {
   ]);
 
 
-  // Generate scheduled sessions for the next 2 weeks
-  const [scheduledSessions, setScheduledSessions] = useState<ScheduledSession[]>(generateMockSessions());
+  // Legacy initial scheduled sessions (only for migration)
+  const legacyInitialSessions: ScheduledSession[] = generateMockSessions();
+  // Scheduled sessions state (loaded/migrated)
+  const [scheduledSessions, setScheduledSessions] = useState<ScheduledSession[]>([]);
+
+  // Authentication + migration handling
+  const [authChecked, setAuthChecked] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const dominickEmail = (import.meta.env.VITE_ADMIN_EMAIL as string) || 'atzlerdo@gmail.com';
+
+  useEffect(() => {
+    const run = async () => {
+      if (!isAuthenticated()) {
+        setAuthChecked(true);
+        return;
+      }
+      // Just load data for existing sessions; avoid implicit auto-migration on unknown users
+      setMigrating(true);
+      try {
+        const [courses, sessions, program] = await Promise.all([apiGetCourses(), apiGetSessions(), apiGetStudyProgram()]);
+        setCourses(courses as Course[]);
+        setScheduledSessions(sessions as ScheduledSession[]);
+        setStudyProgram(program);
+      } catch (e) {
+        console.error('Initial load failed', e);
+        // If API calls fail (e.g., database down or invalid token), clear auth and force re-login
+        logout();
+      } finally {
+        setMigrating(false);
+        setAuthChecked(true);
+      }
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Dialog states
   const [showCourseDialog, setShowCourseDialog] = useState(false);
@@ -709,15 +730,22 @@ function App() {
 
   // Get past sessions that need evaluation
   const getPastUnevaluatedSessions = (): ScheduledSession[] => {
+    if (!scheduledSessions || scheduledSessions.length === 0) return [];
     const now = new Date();
-    
-    return scheduledSessions.filter(session => {
-      // Check if session has ended (comparing end time) in local timezone
-      const [year, month, day] = session.date.split('-').map(Number);
-      const [endHour, endMinute] = session.endTime.split(':').map(Number);
-      const sessionEndDate = new Date(year, month - 1, day, endHour, endMinute, 0, 0);
-      
-      return sessionEndDate < now && !session.completed;
+    return scheduledSessions.filter((session) => {
+      if (!session) return false;
+      const { date, endTime, completed } = session;
+      if (!date || !endTime) return false;
+      // Expect YYYY-MM-DD; guard against malformed values
+      const dateParts = date.split('-');
+      if (dateParts.length !== 3) return false;
+      const [year, month, day] = dateParts.map(Number);
+      if (!year || !month || !day) return false;
+      const timeParts = endTime.split(':');
+      if (timeParts.length < 2) return false;
+      const [endHour, endMinute] = timeParts.map(Number);
+      const sessionEndDate = new Date(year, month - 1, day, endHour || 0, endMinute || 0, 0, 0);
+      return sessionEndDate < now && !completed;
     });
   };
 
@@ -821,67 +849,87 @@ function App() {
     setShowCourseDialog(true);
   };
 
-  const handleSaveCourse = (courseData: Omit<Course, 'id' | 'progress' | 'completedHours' | 'createdAt'>) => {
-    if (editingCourse) {
-      // Update existing course
-      setCourses(prev => prev.map(c => 
-        c.id === editingCourse.id 
-          ? { 
-              ...editingCourse, 
-              ...courseData,
-              // Recalculate estimated end date based on remaining hours and weekly capacity
-              estimatedEndDate: calculateEstimatedEndDate(
-                courseData.estimatedHours - editingCourse.completedHours,
-                weeklyCapacity
-              )
-            }
-          : c
-      ));
-    } else {
-      // Create new course
-      const newCourse: Course = {
-        id: `course-${Date.now()}`,
-        ...courseData,
-        progress: 0,
-        completedHours: 0,
-        createdAt: new Date().toISOString(),
-        estimatedEndDate: calculateEstimatedEndDate(courseData.estimatedHours, weeklyCapacity),
-      };
-      setCourses(prev => [...prev, newCourse]);
-      
-      // Automatically generate schedule when course is added
-      generateSchedule([newCourse], studyBlocks);
+  const handleSaveCourse = async (courseData: Omit<Course, 'id' | 'progress' | 'completedHours' | 'createdAt'>) => {
+    try {
+      if (editingCourse) {
+        // Recalculate estimated end date if estimated hours changed
+        const estimatedEndDate = calculateEstimatedEndDate(
+          courseData.estimatedHours - editingCourse.completedHours,
+          weeklyCapacity
+        );
+        await apiUpdateCourse(editingCourse.id, {
+          name: courseData.name,
+          type: courseData.type,
+          ects: courseData.ects,
+          estimatedHours: courseData.estimatedHours,
+          estimatedEndDate,
+          examDate: courseData.examDate,
+          semester: courseData.semester,
+        });
+      } else {
+        const estimatedEndDate = calculateEstimatedEndDate(courseData.estimatedHours, weeklyCapacity);
+        await apiCreateCourse({
+          name: courseData.name,
+          type: courseData.type,
+          ects: courseData.ects,
+          estimatedHours: courseData.estimatedHours,
+          estimatedEndDate,
+          examDate: courseData.examDate,
+          semester: courseData.semester,
+        });
+      }
+      // Refresh from backend
+      const [courses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(courses as Course[]);
+      setScheduledSessions(sessions as ScheduledSession[]);
+    } catch (e) {
+      console.error('Course save failed', e);
+    } finally {
+      setEditingCourse(undefined);
     }
-    
-    setEditingCourse(undefined);
   };
 
-  const handleDeleteCourse = (courseId: string) => {
-    if (confirm('Möchtest du diesen Kurs wirklich löschen?')) {
-      setCourses(prev => prev.filter(c => c.id !== courseId));
+  const handleDeleteCourse = async (courseId: string) => {
+    if (!confirm('Möchtest du diesen Kurs wirklich löschen?')) return;
+    try {
+      await apiDeleteCourse(courseId);
+      const [courses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(courses as Course[]);
+      setScheduledSessions(sessions as ScheduledSession[]);
+    } catch (e) {
+      console.error('Delete course failed', e);
     }
   };
 
-  const handleCompleteCourse = (courseId: string) => {
+  const handleCompleteCourse = async (courseId: string) => {
     const course = courses.find(c => c.id === courseId);
     if (!course) return;
     
     if (confirm(`Möchtest du den Kurs "${course.name}" wirklich abschließen? Die ECTS-Punkte werden deinem Studienfortschritt hinzugefügt.`)) {
-      // Mark course as completed
-      setCourses(prev => prev.map(c => 
-        c.id === courseId 
-          ? { ...c, status: 'completed' as const, progress: 100, completedHours: c.estimatedHours }
-          : c
-      ));
-      
-      // Add ECTS to study program
+      try {
+        // Update course on backend
+        // Will update extended fields via direct fetch below
+        // await apiUpdateCourse(courseId, {});
+        // Quick extended update via migration endpoint (status/progress/hours)
+        // We reuse updateCourse since extended fields are allowed server-side
+        const token = localStorage.getItem('authToken');
+        await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${courseId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ status: 'completed', progress: 100, completedHours: course.estimatedHours }),
+        });
+        // Refresh courses
+        const latest = await apiGetCourses();
+        setCourses(latest as Course[]);
+      } catch (e) {
+        console.error('Complete course failed', e);
+      }
+      // Add ECTS to study program (backend + local)
       setStudyProgram(prev => {
-        const updated = {
-          ...prev,
-          completedECTS: prev.completedECTS + course.ects
-        };
-        localStorage.setItem('studyProgram', JSON.stringify(updated));
-        return updated;
+        const prevVal = prev || { totalECTS: 180, completedECTS: 0, hoursPerECTS: 27.5 };
+        const newCompleted = prevVal.completedECTS + course.ects;
+        apiUpdateStudyProgram({ completedECTS: newCompleted }).catch(err => console.error('Failed to update study program completion', err));
+        return { ...prevVal, completedECTS: newCompleted };
       });
     }
   };
@@ -1030,7 +1078,7 @@ function App() {
     }, 300);
   };
 
-  const handleSaveSession = (sessionData: Omit<ScheduledSession, 'id'>, recurring?: { enabled: boolean }) => {
+  const handleSaveSession = async (sessionData: Omit<ScheduledSession, 'id'>) => {
     console.log('💾 Saving Session:', {
       isEditing: !!editingSession,
       sessionData: {
@@ -1043,93 +1091,54 @@ function App() {
       currentTime: new Date().toString()
     });
     
-    if (editingSession) {
-      const updatedSession = { ...editingSession, ...sessionData, lastModified: Date.now() };
-      console.log('✏️ Updated existing session:', updatedSession);
-      setScheduledSessions(prev => prev.map(s => 
-        s.id === editingSession.id ? updatedSession : s
-      ));
-    } else {
-      const newSession: ScheduledSession = {
-        id: `session-${Date.now()}`,
-        ...sessionData,
-        lastModified: Date.now(),
-      };
-      console.log('✨ Created new session:', newSession);
-      
-      // If recurring is enabled, create multiple sessions
-      if (recurring?.enabled) {
-        const course = courses.find(c => c.id === sessionData.courseId);
-        if (course) {
-          const remainingHours = course.estimatedHours - course.completedHours - course.scheduledHours;
-          const sessionHours = sessionData.durationMinutes / 60;
-          const sessionsNeeded = Math.ceil(remainingHours / sessionHours);
-          
-          const sessions: ScheduledSession[] = [];
-          const startDate = new Date(sessionData.date);
-          
-          for (let i = 0; i < sessionsNeeded && i < 20; i++) { // Max 20 sessions
-            const sessionDate = new Date(startDate);
-            sessionDate.setDate(startDate.getDate() + (i * 7)); // Weekly recurring
-            
-            // Format date to local YYYY-MM-DD without UTC conversion
-            const year = sessionDate.getFullYear();
-            const month = String(sessionDate.getMonth() + 1).padStart(2, '0');
-            const day = String(sessionDate.getDate()).padStart(2, '0');
-            const localDateStr = `${year}-${month}-${day}`;
-            
-            // Calculate endDate if original session spans multiple days
-            let localEndDateStr = undefined;
-            if (sessionData.endDate && sessionData.endDate !== sessionData.date) {
-              const daysDiff = Math.floor((new Date(sessionData.endDate).getTime() - new Date(sessionData.date).getTime()) / (1000 * 60 * 60 * 24));
-              const sessionEndDate = new Date(sessionDate);
-              sessionEndDate.setDate(sessionEndDate.getDate() + daysDiff);
-              const endYear = sessionEndDate.getFullYear();
-              const endMonth = String(sessionEndDate.getMonth() + 1).padStart(2, '0');
-              const endDay = String(sessionEndDate.getDate()).padStart(2, '0');
-              localEndDateStr = `${endYear}-${endMonth}-${endDay}`;
-            }
-            
-            sessions.push({
-              ...sessionData,
-              id: `session-${Date.now()}-${i}`,
-              date: localDateStr,
-              endDate: localEndDateStr,
-              lastModified: Date.now(),
-            });
-          }
-          
-          setScheduledSessions(prev => [...prev, ...sessions]);
-          
-          // Update scheduled hours for the course
-          setCourses(prev => prev.map(c => 
-            c.id === sessionData.courseId 
-              ? { ...c, scheduledHours: c.scheduledHours + (sessions.length * sessionHours) }
-              : c
-          ));
-        }
+    try {
+      if (editingSession) {
+        await apiUpdateSession(editingSession.id, {
+          courseId: sessionData.courseId,
+          studyBlockId: sessionData.studyBlockId,
+          date: sessionData.date,
+          startTime: sessionData.startTime,
+          endDate: sessionData.endDate,
+          endTime: sessionData.endTime,
+          durationMinutes: sessionData.durationMinutes,
+          notes: sessionData.notes,
+          // Forward recurrence data when present
+          ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
+        });
       } else {
-        setScheduledSessions(prev => [...prev, newSession]);
-        
-        // Update scheduled hours for single session
-        const sessionHours = sessionData.durationMinutes / 60;
-        setCourses(prev => prev.map(c => 
-          c.id === sessionData.courseId 
-            ? { ...c, scheduledHours: c.scheduledHours + sessionHours }
-            : c
-        ));
+        await apiCreateSession({
+          courseId: sessionData.courseId,
+          studyBlockId: sessionData.studyBlockId,
+          date: sessionData.date,
+          startTime: sessionData.startTime,
+          endDate: sessionData.endDate,
+          endTime: sessionData.endTime,
+          durationMinutes: sessionData.durationMinutes,
+          notes: sessionData.notes,
+          // Create recurrence pattern in backend if provided
+          ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
+        });
+        // TODO: Implement proper recurring server-side; currently we only create the single session
       }
-    }
-    
-    // Automatically activate course if it's still planned
-    const selectedCourse = courses.find(c => c.id === sessionData.courseId);
-    if (selectedCourse && selectedCourse.status === 'planned') {
-      console.log('🎯 Activating planned course:', selectedCourse.name);
-      setCourses(prev => prev.map(c => 
-        c.id === sessionData.courseId 
-          ? { ...c, status: 'active' as const }
-          : c
-      ));
+      const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(freshCourses as Course[]);
+      setScheduledSessions(freshSessions as ScheduledSession[]);
+      // Auto-activate course if planned
+      if (sessionData.courseId) {
+        const course = freshCourses.find(c => c.id === sessionData.courseId);
+        if (course && course.status === 'planned') {
+          const token = localStorage.getItem('authToken');
+          await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${course.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ status: 'active' }),
+          });
+          const again = await apiGetCourses();
+            setCourses(again as Course[]);
+        }
+      }
+    } catch (e) {
+      console.error('Save session failed', e);
     }
     
     // Clear state and close dialog
@@ -1141,9 +1150,14 @@ function App() {
     setAutoSyncTrigger(Date.now());
   };
 
-  const handleDeleteSession = (sessionId: string) => {
+  const handleDeleteSession = async (sessionId: string) => {
     console.log(`🗑️ App: Deleting session ${sessionId}`);
-    
+    try {
+      await apiDeleteSession(sessionId);
+    } catch (e) {
+      console.error('Delete session API failed (will still update local state)', e);
+    }
+
     setScheduledSessions(prev => {
       // Check if this is an expanded instance (has underscore in ID like "master_2025-11-11")
       // If so, we need to delete the recurring master instead
@@ -1341,8 +1355,86 @@ function App() {
     setShowSessionDialog(true);
   };
 
+  // Gate: show auth screen if not authenticated yet
+  if (!authChecked || !isAuthenticated()) {
+    return (
+      <AuthScreen
+        onAuthenticated={async (auth: AuthResponse) => {
+          // After auth, re-run migration logic
+          setMigrating(true);
+          try {
+            setCurrentUserId(auth.user.id);
+            const onboardKey = `hasOnboarded:${auth.user.id}`;
+            const program = await apiGetStudyProgram();
+            setStudyProgram(program);
+            
+            // Load courses and sessions first
+            let courses: Course[];
+            let sessions: ScheduledSession[];
+            
+            if (auth.user.email && auth.user.email.toLowerCase() === dominickEmail.toLowerCase()) {
+              const migrated = await migrateIfEmpty({
+                courses: legacyInitialCourses,
+                sessions: legacyInitialSessions,
+              });
+              courses = migrated.courses as Course[];
+              sessions = migrated.sessions as ScheduledSession[];
+            } else {
+              // For non-Dominick users, do not migrate legacy data; just load what's in backend (likely empty)
+              const [loadedCourses, loadedSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+              courses = loadedCourses as Course[];
+              sessions = loadedSessions as ScheduledSession[];
+            }
+            
+            setCourses(courses);
+            setScheduledSessions(sessions);
+            
+            // Calculate completed ECTS from completed courses and sync with backend if needed
+            const completedCoursesECTS = courses
+              .filter(c => c.status === 'completed')
+              .reduce((sum, c) => sum + c.ects, 0);
+            
+            // If backend completedECTS doesn't match actual completed courses, sync it
+            // Only do this if program was loaded successfully
+            if (program && program.completedECTS !== completedCoursesECTS) {
+              try {
+                const updated = await apiUpdateStudyProgram({ completedECTS: completedCoursesECTS });
+                setStudyProgram(updated);
+              } catch (err) {
+                console.error('Failed to sync completedECTS with completed courses', err);
+                // Still update local state even if backend fails
+                setStudyProgram(prev => ({ ...prev, completedECTS: completedCoursesECTS }));
+              }
+            }
+            
+            // Show onboarding only for new users who haven't completed setup and have no data
+            if (!localStorage.getItem(onboardKey) && courses.length === 0 && sessions.length === 0) {
+              setShowOnboarding(true);
+            }
+          } catch (e) {
+            console.error('Initial load after auth failed', e);
+            // If data load fails after authentication, clear auth token and force re-login
+            logout();
+            alert('Fehler beim Laden der Daten. Bitte melde dich erneut an oder stelle sicher, dass der Server läuft.');
+          } finally {
+            setMigrating(false);
+            setAuthChecked(true);
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="h-screen lg:overflow-hidden bg-gray-50 flex flex-col">
+      {migrating && (
+        <div className="fixed inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="p-6 rounded-lg bg-white shadow-md space-y-2">
+            <p className="font-medium">Daten werden geladen…</p>
+            <p className="text-sm text-gray-600">Bitte warten, während deine Kurse und Sessions synchronisiert werden.</p>
+          </div>
+        </div>
+      )}
       {/* App Header - Desktop */}
       <header className="hidden lg:block bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-4">
@@ -1370,6 +1462,17 @@ function App() {
                   : 'font-semibold'}
               >
                 Kurse
+              </Button>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => {
+                  logout();
+                  window.location.reload();
+                }}
+                className="font-semibold"
+              >
+                Abmelden
               </Button>
             </nav>
           </div>

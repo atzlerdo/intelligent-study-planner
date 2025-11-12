@@ -15,6 +15,7 @@ export interface Course {
   milestones: Milestone[];
   createdAt: string;
   semester?: number; // Semester number (1-6 for Bachelor)
+  updatedAt?: string; // Optional timestamp from backend updates
 }
 
 export interface StudyProgram {
@@ -42,7 +43,7 @@ export interface StudyBlock {
 export interface ScheduledSession {
   id: string;
   courseId?: string; // Optional: undefined for unassigned sessions (blockers)
-  studyBlockId: string;
+  studyBlockId?: string; // Optional for sessions created via direct dialog input
   date: string;
   startTime: string;
   endDate?: string; // Optional: for sessions spanning multiple days

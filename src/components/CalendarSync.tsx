@@ -7,6 +7,7 @@ import { Calendar, CheckCircle, XCircle, RefreshCw, LogIn } from 'lucide-react';
 import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
 import { SyncStatsDisplay } from './SyncStatsDisplay';
+import { getGoogleCalendarToken, saveGoogleCalendarToken, deleteGoogleCalendarToken } from '../lib/api';
 
 interface CalendarSyncProps {
   sessions: ScheduledSession[];
@@ -17,28 +18,37 @@ interface CalendarSyncProps {
 }
 
 export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTrigger, onStateChange }: CalendarSyncProps) {
-  // Persist connection state in localStorage
-  const [accessToken, setAccessToken] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('googleCalendarAccessToken');
-    } catch {
-      return null;
-    }
-  });
-  const [isConnected, setIsConnected] = useState(() => !!accessToken);
+  // Token and sync state now loaded from backend
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(() => {
-    try {
-      const saved = localStorage.getItem('googleCalendarLastSync');
-      return saved ? new Date(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [isLoadingToken, setIsLoadingToken] = useState(true);
   const [syncStatus, setSyncStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
   }>({ type: null, message: '' });
+
+  // Load token from backend on mount
+  useEffect(() => {
+    const loadToken = async () => {
+      try {
+        const tokenData = await getGoogleCalendarToken();
+        if (tokenData) {
+          setAccessToken(tokenData.accessToken);
+          setIsConnected(true);
+          if (tokenData.lastSync) {
+            setLastSyncTime(new Date(tokenData.lastSync));
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load Google Calendar token:', error);
+      } finally {
+        setIsLoadingToken(false);
+      }
+    };
+    loadToken();
+  }, []);
 
   // Notify parent about state changes for icon indicator
   useEffect(() => {
@@ -46,19 +56,6 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
       onStateChange({ isConnected, isSyncing });
     }
   }, [isConnected, isSyncing, onStateChange]);
-
-  // Persist token changes
-  useEffect(() => {
-    try {
-      if (accessToken) {
-        localStorage.setItem('googleCalendarAccessToken', accessToken);
-      } else {
-        localStorage.removeItem('googleCalendarAccessToken');
-      }
-    } catch (e) {
-      console.error('Failed to persist access token:', e);
-    }
-  }, [accessToken]);
 
   // Auto-sync when autoSyncTrigger changes (session added/edited/deleted)
   useEffect(() => {
@@ -114,14 +111,24 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
           setSyncStatus({ type: 'error', message: `Invalid access token: ${tokenCheck.error || 'unknown error'}` });
           return;
         }
+        
+        // Save token to backend
+        await saveGoogleCalendarToken({
+          accessToken: token,
+          tokenExpiry: tokenResponse.expires_in ? Date.now() + tokenResponse.expires_in * 1000 : undefined,
+        });
+        
         setAccessToken(token);
         setIsConnected(true);
         setSyncStatus({
           type: 'success',
           message: 'Successfully connected to Google Calendar',
         });
+        
+        // Notify other components that token has changed
+        window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
       } catch (e) {
-        setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to validate token' });
+        setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save token' });
       }
     },
     onError: (err) => {
@@ -163,11 +170,11 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
       if (result.success) {
         const syncTime = new Date();
         setLastSyncTime(syncTime);
-        try {
-          localStorage.setItem('googleCalendarLastSync', syncTime.toISOString());
-        } catch (e) {
-          console.error('Failed to persist last sync time:', e);
-        }
+        // Save last sync time to backend (don't await to avoid blocking UI)
+        saveGoogleCalendarToken({
+          accessToken: accessToken,
+        }).catch(e => console.error('Failed to update last sync time:', e));
+        
         setSyncStatus({
           type: 'success',
           message: `Synced ${result.syncedToCalendar} sessions to calendar`,
@@ -195,16 +202,21 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     }
   };
 
-  const handleDisconnect = () => {
-    setAccessToken(null);
-    setIsConnected(false);
-    setLastSyncTime(null);
-    setSyncStatus({ type: null, message: '' });
+  const handleDisconnect = async () => {
     try {
-      localStorage.removeItem('googleCalendarAccessToken');
-      localStorage.removeItem('googleCalendarLastSync');
+      // Delete token from backend
+      await deleteGoogleCalendarToken();
+      
+      setAccessToken(null);
+      setIsConnected(false);
+      setLastSyncTime(null);
+      setSyncStatus({ type: null, message: '' });
+      
+      // Notify other components that token has been removed
+      window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
     } catch (e) {
-      console.error('Failed to clear stored credentials:', e);
+      console.error('Failed to disconnect:', e);
+      setSyncStatus({ type: 'error', message: 'Failed to disconnect from Google Calendar' });
     }
   };
 
@@ -220,6 +232,11 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Show loading state while fetching token */}
+        {isLoadingToken ? (
+          <div className="text-center text-gray-500 py-4">Loading connection status...</div>
+        ) : (
+          <>
         {/* Connection Status */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -286,7 +303,8 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
 
         {/* Sync Statistics */}
         {isConnected && <SyncStatsDisplay accessToken={accessToken} isSyncing={isSyncing} />}
-
+        </>
+        )}
       </CardContent>
     </Card>
   );

@@ -1,5 +1,48 @@
 # Changelog
 
+## [v0.5.0] - 2025-11-12
+
+### Security & Architecture
+- **🔒 User-specific Google Calendar tokens**: Google Calendar OAuth tokens now stored per-user in database backend instead of shared browser localStorage
+- **Backend token storage**: New `google_calendar_tokens` table with user_id foreign key constraint enforces one-to-one user-to-Google-account mapping
+- **API authentication**: All Google Calendar token operations require JWT authentication via middleware
+- **Logout cleanup**: Automatic clearing of Google Calendar cache keys on logout prevents data leakage between users
+
+### Added
+- **Backend API endpoints**: 
+  - `GET /api/google-calendar/token` - Retrieve user's Google Calendar token
+  - `POST /api/google-calendar/token` - Save/update user's token with Zod validation
+  - `DELETE /api/google-calendar/token` - Disconnect and remove token
+  - `PATCH /api/google-calendar/token/last-sync` - Update sync timestamp
+- **Database table**: `google_calendar_tokens` with fields: user_id, access_token, refresh_token, token_expiry, calendar_id, google_email, last_sync, timestamps
+- **Frontend API client**: New functions in `api.ts` for token management (getGoogleCalendarToken, saveGoogleCalendarToken, deleteGoogleCalendarToken, updateLastSync)
+- **Event-driven sync**: Custom `googleCalendarTokenChanged` event for efficient component communication
+- **Smart polling**: GoogleCalendarSyncService only polls backend when already connected (no more API spam when disconnected)
+
+### Changed
+- **CalendarSync component**: Migrated from localStorage to backend API for all token operations
+- **GoogleCalendarSyncService**: Replaced continuous 5-second polling with event-driven token updates
+- **Token loading**: Services now load tokens from backend on mount with proper 404 error handling
+- **Sync timestamp**: Last sync time now stored in database via API instead of localStorage
+
+### Fixed
+- **Console error for new users**: Added null check for `studyProgram` before accessing `completedECTS` property
+- **Recurring session duplication**: Changed `singleEvents: false` in Google Calendar API calls to prevent duplicate event instances
+- **Unnecessary API calls**: Eliminated continuous token polling when user not connected to Google Calendar
+- **Error logging spam**: API 404 responses (no token found) now handled silently instead of console errors
+
+### Removed
+- **Registration UI cleanup**: Removed unnecessary "Abbrechen" (Cancel) button and verbose description text from RegisterInline component
+
+### Technical Details
+- **Migration path**: Automatic migration of hardcoded legacy courses/sessions for admin user on first login
+- **Database persistence**: SQLite with sql.js for browser-compatible storage
+- **Token security**: Tokens isolated by user_id with CASCADE deletion on user removal
+- **Cache isolation**: Google Calendar cache keys cleared on logout to prevent cross-user data access
+
+### Breaking Changes
+- Google Calendar connections established before this version will need to be reconnected due to migration from localStorage to backend storage
+
 ## [v0.4.0] - 2025-11-11
 
 ### Added
@@ -86,7 +129,9 @@ All notable changes to this project will be documented in this file.
 ### Notes
 - Charts typings temporarily disabled with `// @ts-nocheck` in `chart.tsx` pending refinement
 
-[Unreleased]: https://github.com/atzlerdo/intelligent-study-planner/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/atzlerdo/intelligent-study-planner/compare/v0.5.0...HEAD
+[v0.5.0]: https://github.com/atzlerdo/intelligent-study-planner/releases/tag/v0.5.0
+[v0.4.0]: https://github.com/atzlerdo/intelligent-study-planner/releases/tag/v0.4.0
 [v0.3.0]: https://github.com/atzlerdo/intelligent-study-planner/releases/tag/v0.3.0
 [v0.2.0]: https://github.com/atzlerdo/intelligent-study-planner/releases/tag/v0.2.0
 
