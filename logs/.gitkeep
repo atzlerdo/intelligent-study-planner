@@ -1,0 +1,2 @@
+# This folder is for storing log files during development
+# The folder itself is tracked, but log files are ignored by .gitignore

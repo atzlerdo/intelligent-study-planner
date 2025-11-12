@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
 import { getGoogleCalendarToken, deleteGoogleCalendarToken, updateLastSync } from '../lib/api';
@@ -99,9 +99,22 @@ export function GoogleCalendarSyncService({
   };
 
   // Auto-sync when autoSyncTrigger changes (session added/edited/deleted)
+  // Use a ref to prevent rapid re-syncs within 2 seconds
+  const lastSyncTriggerRef = useRef<number>(0);
+  
   useEffect(() => {
     if (autoSyncTrigger && isConnected && !isSyncing) {
+      const now = Date.now();
+      const timeSinceLastTrigger = now - lastSyncTriggerRef.current;
+      
+      // Debounce: only sync if at least 2 seconds passed since last auto-sync trigger
+      if (timeSinceLastTrigger < 2000) {
+        console.log('⏸️ Auto-sync debounced (triggered too soon after previous sync)');
+        return;
+      }
+      
       console.log('🔄 Auto-sync triggered by session change');
+      lastSyncTriggerRef.current = now;
       handleSync();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
