@@ -771,6 +771,17 @@ function App() {
   const [originalSessionBeforeMove, setOriginalSessionBeforeMove] = useState<ScheduledSession | null>(null);
   const [previewSession, setPreviewSession] = useState<ScheduledSession | null>(null);
 
+  // Check for past unevaluated sessions on startup
+  useEffect(() => {
+    if (authChecked && !migrating && scheduledSessions.length > 0 && !showOnboarding) {
+      const pastSessions = getPastUnevaluatedSessions();
+      if (pastSessions.length > 0) {
+        setShowPastSessionsReview(true);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authChecked, migrating, scheduledSessions.length, showOnboarding]);
+
   // Clear preview session when navigating away or closing dialog
   useEffect(() => {
     if (!showSessionDialog) {
