@@ -1,10 +1,23 @@
-// API client for backend communication
+/**
+ * API Client for Backend Communication
+ * 
+ * This module handles all HTTP communication with the backend server.
+ * It manages authentication tokens, makes API requests, and handles errors.
+ */
 
+// Base URL for all API requests - uses environment variable or defaults to localhost
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
-// Token management
+// ============================================================================
+// Authentication Token Management
+// ============================================================================
+// Store JWT authentication token in memory (loaded from localStorage on init)
 let authToken: string | null = localStorage.getItem('authToken');
 
+/**
+ * Set or clear the authentication token
+ * Persists to localStorage for session recovery after page reload
+ */
 export function setAuthToken(token: string | null) {
   authToken = token;
   if (token) {
@@ -14,14 +27,24 @@ export function setAuthToken(token: string | null) {
   }
 }
 
+/**
+ * Get the current authentication token
+ */
 export function getAuthToken(): string | null {
   return authToken;
 }
 
+/**
+ * Check if user is currently authenticated (has valid token)
+ */
 export function isAuthenticated(): boolean {
   return !!authToken;
 }
 
+/**
+ * Custom error class for API-specific errors
+ * Includes HTTP status code and detailed error information
+ */
 export class ApiError extends Error {
   details?: unknown;
   status?: number;
@@ -33,46 +56,67 @@ export class ApiError extends Error {
   }
 }
 
-// Generic fetch wrapper with detailed error propagation
+// ============================================================================
+// Generic Fetch Wrapper
+// ============================================================================
+/**
+ * Generic HTTP request wrapper with authentication and error handling
+ * 
+ * @param endpoint - API endpoint path (e.g., '/auth/login')
+ * @param options - Fetch options (method, body, etc.)
+ * @returns Parsed JSON response
+ * @throws ApiError if request fails
+ */
 async function fetchAPI<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  // Set up headers with JSON content type
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string>),
   };
 
+  // Add authentication token to header if available
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
+  // Make the HTTP request
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers,
   });
 
+  // Handle errors by parsing response and throwing ApiError
   if (!response.ok) {
     let payload: { error?: string; details?: unknown } = { error: 'Request failed' };
     try {
       payload = await response.json();
-    } catch {/* ignore */}
+    } catch {/* ignore parse errors */}
     const message = payload.error || `HTTP ${response.status}`;
     throw new ApiError(message, payload.details, response.status);
   }
 
+  // Return parsed JSON response
   return response.json();
 }
 
-// Auth API
+// ============================================================================
+// Authentication API
+// ============================================================================
+
+/** User registration data */
 export interface RegisterData {
   email: string;
   password: string;
   name: string;
 }
 
+/** User login credentials */
 export interface LoginData {
   email: string;
   password: string;
 }
 
+/** Authentication response from server (includes JWT token and user info) */
 export interface AuthResponse {
   token: string;
   user: {
@@ -82,6 +126,10 @@ export interface AuthResponse {
   };
 }
 
+/**
+ * Register a new user account
+ * Automatically stores the returned auth token
+ */
 export async function register(data: RegisterData): Promise<AuthResponse> {
   const response = await fetchAPI<AuthResponse>('/auth/register', {
     method: 'POST',
@@ -91,6 +139,10 @@ export async function register(data: RegisterData): Promise<AuthResponse> {
   return response;
 }
 
+/**
+ * Login with email and password
+ * Automatically stores the returned auth token
+ */
 export async function login(data: LoginData): Promise<AuthResponse> {
   const response = await fetchAPI<AuthResponse>('/auth/login', {
     method: 'POST',
@@ -100,10 +152,16 @@ export async function login(data: LoginData): Promise<AuthResponse> {
   return response;
 }
 
+/**
+ * Logout current user
+ * Clears authentication token and Google Calendar cache to prevent data leakage
+ */
 export function logout() {
+  // Clear authentication token
   setAuthToken(null);
   
   // Clear Google Calendar cache keys to prevent data leakage between users
+  // This ensures the next user won't see previous user's calendar data
   try {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
@@ -118,7 +176,11 @@ export function logout() {
   }
 }
 
+// ============================================================================
 // Courses API
+// ============================================================================
+
+/** Course entity with all fields */
 export interface Course {
   id: string;
   name: string;
@@ -142,6 +204,7 @@ export interface Course {
   }>;
 }
 
+/** Data required to create a new course */
 export interface CreateCourseData {
   name: string;
   type: 'written-exam' | 'project';
@@ -152,6 +215,10 @@ export interface CreateCourseData {
   semester?: number;
 }
 
+/**
+ * Fetch all courses for the current user
+ * Maps server's snake_case fields to frontend's camelCase
+ */
 export async function getCourses(): Promise<Course[]> {
   const raw = await fetchAPI<Array<Record<string, unknown>>>('/courses');
   // Map snake_case from server to camelCase expected by frontend
@@ -424,27 +491,40 @@ export async function updateStudyProgram(data: Partial<StudyProgram>): Promise<S
   });
 }
 
+// ============================================================================
 // Google Calendar Token API
+// ============================================================================
+// Manages user-specific Google Calendar OAuth tokens stored in backend database
+
+/** Google Calendar OAuth token with metadata */
 export interface GoogleCalendarToken {
-  accessToken: string;
-  refreshToken?: string;
-  tokenExpiry?: number;
-  calendarId?: string;
-  googleEmail?: string;
-  lastSync?: number;
+  accessToken: string;        // OAuth access token for Google Calendar API
+  refreshToken?: string;       // Optional refresh token for token renewal
+  tokenExpiry?: number;        // Token expiration timestamp
+  calendarId?: string;         // ID of the dedicated "Intelligent Study Planner" calendar
+  googleEmail?: string;        // User's Google email address
+  lastSync?: number;           // Timestamp of last successful sync
 }
 
+/**
+ * Retrieve current user's Google Calendar token from backend
+ * @returns Token object if exists, null if user hasn't connected Google Calendar
+ */
 export async function getGoogleCalendarToken(): Promise<GoogleCalendarToken | null> {
   try {
     return await fetchAPI<GoogleCalendarToken>('/google-calendar/token');
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
-      return null; // No token found
+      return null; // No token found - user hasn't connected Google Calendar yet
     }
-    throw error;
+    throw error; // Re-throw other errors
   }
 }
 
+/**
+ * Save or update Google Calendar token for current user
+ * Creates new token entry or updates existing one
+ */
 export async function saveGoogleCalendarToken(token: Omit<GoogleCalendarToken, 'lastSync'>): Promise<void> {
   await fetchAPI<{ success: boolean }>('/google-calendar/token', {
     method: 'POST',
@@ -452,12 +532,21 @@ export async function saveGoogleCalendarToken(token: Omit<GoogleCalendarToken, '
   });
 }
 
+/**
+ * Delete Google Calendar token (disconnect from Google Calendar)
+ * Removes token from backend database
+ */
 export async function deleteGoogleCalendarToken(): Promise<void> {
   await fetchAPI<{ success: boolean }>('/google-calendar/token', {
     method: 'DELETE',
   });
 }
 
+/**
+ * Update the last sync timestamp for current user's Google Calendar token
+ * Called after successful sync to track sync history
+ * @returns New lastSync timestamp
+ */
 export async function updateLastSync(): Promise<number> {
   const result = await fetchAPI<{ success: boolean; lastSync: number }>('/google-calendar/token/last-sync', {
     method: 'PATCH',

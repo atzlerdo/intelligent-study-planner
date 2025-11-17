@@ -1,3 +1,38 @@
+/**
+ * ============================================================================
+ * INTELLIGENT STUDY PLANNER - Main Application Component
+ * ============================================================================
+ * 
+ * Root component that manages all application state and coordinates between:
+ * - Authentication (login/logout)
+ * - Study program setup (onboarding)
+ * - Courses, sessions, and study blocks (CRUD operations)
+ * - Google Calendar synchronization
+ * - Session attendance and feedback tracking
+ * - Multi-view navigation (dashboard, courses, calendar)
+ * 
+ * STATE ARCHITECTURE:
+ * - All state stored in backend database (SQLite via Express API)
+ * - JWT authentication for user-specific data isolation
+ * - State synchronized with backend on every operation
+ * - Legacy localStorage keys used for migration only
+ * 
+ * DATA FLOW:
+ * 1. User authenticates → JWT token stored in localStorage
+ * 2. App loads user data from backend (courses, sessions, study blocks, program)
+ * 3. User modifies data → immediate API call to backend
+ * 4. Backend returns updated data → local state updated
+ * 5. Google Calendar sync triggered if connected
+ * 
+ * KEY FEATURES:
+ * - Automatic session attendance tracking (checks for past sessions)
+ * - Missed session replanning (move to different time slot)
+ * - Course status lifecycle: planned → active → completed
+ * - Three-segment progress tracking (completed/scheduled/remaining hours)
+ * - ECTS completion tracking for degree progress
+ * - Multi-day session support (sessions spanning midnight)
+ */
+
 import { useState, useEffect } from 'react';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { SessionAttendanceDialog } from './components/sessions/SessionAttendanceDialog';
@@ -29,25 +64,43 @@ import { calculateWeeklyAvailableMinutes, calculateEstimatedEndDate, calculateDu
 import { generateMockSessions } from './lib/mockSessions';
 
 function App() {
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [showAttendanceDialog, setShowAttendanceDialog] = useState(false);
-  const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
-  const [showPastSessionsReview, setShowPastSessionsReview] = useState(false);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
-  const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);
-  // Replan missed session dialog state
-  const [showReplanDialog, setShowReplanDialog] = useState(false);
-  const [replanCandidate, setReplanCandidate] = useState<ScheduledSession | null>(null);
-  const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null);
-  const [replanHandled, setReplanHandled] = useState(false);
+  // ============================================================================
+  // DIALOG STATE - Which modals/dialogs are currently open
+  // ============================================================================
   
-  // Study program state (loaded from backend; fallback defaults used until fetched)
+  const [showOnboarding, setShowOnboarding] = useState(false);               // Onboarding: study program setup
+  const [showAttendanceDialog, setShowAttendanceDialog] = useState(false);   // Attendance: mark session as attended/missed
+  const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);       // Feedback: actual hours worked, progress assessment
+  const [showPastSessionsReview, setShowPastSessionsReview] = useState(false); // Review: all past sessions for bulk feedback
+  
+  // ============================================================================
+  // NAVIGATION STATE - Current view and sync triggers
+  // ============================================================================
+  
+  const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
+  const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);         // Timestamp that triggers Google Calendar auto-sync
+  
+  // ============================================================================
+  // MISSED SESSION REPLANNING STATE
+  // ============================================================================
+  
+  const [showReplanDialog, setShowReplanDialog] = useState(false);           // Show replan confirmation dialog
+  const [replanCandidate, setReplanCandidate] = useState<ScheduledSession | null>(null); // Session being replanned
+  const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null); // Original missed session
+  const [replanHandled, setReplanHandled] = useState(false);                 // Flag to prevent duplicate replan prompts
+  
+  // ============================================================================
+  // STUDY PROGRAM STATE - Degree progress tracking
+  // ============================================================================
+  
+  // Study program configuration loaded from backend database
+  // Default values used until first fetch completes
   const [studyProgram, setStudyProgram] = useState<StudyProgram>({
-    totalECTS: 180,
-    completedECTS: 0,
-    hoursPerECTS: 27.5,
+    totalECTS: 180,      // Bachelor's degree total (6 semesters)
+    completedECTS: 0,    // ECTS earned so far
+    hoursPerECTS: 27.5,  // German standard: 1 ECTS = 27.5 hours
   });
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);   // Current authenticated user ID
 
   // Trigger sync when dashboard view is shown
   useEffect(() => {
@@ -1078,6 +1131,27 @@ function App() {
     }, 300);
   };
 
+  /**
+   * ============================================================================
+   * SESSION CRUD - Create/Update session
+   * ============================================================================
+   * 
+   * Handles both new session creation and editing existing sessions.
+   * 
+   * Process:
+   * 1. Save to backend via API (create or update)
+   * 2. Refresh courses and sessions from backend
+   * 3. Auto-activate course if status is 'planned'
+   * 4. Clear edit state and close dialog
+   * 5. Trigger Google Calendar sync
+   * 
+   * Course Lifecycle:
+   * - planned: Course has no scheduled sessions yet
+   * - active: First session scheduled (auto-transition happens here)
+   * - completed: User manually marks course as finished
+   * 
+   * @param sessionData Session fields (without ID for new sessions)
+   */
   const handleSaveSession = async (sessionData: Omit<ScheduledSession, 'id'>) => {
     console.log('💾 Saving Session:', {
       isEditing: !!editingSession,
@@ -1092,6 +1166,7 @@ function App() {
     });
     
     try {
+      // Update existing session or create new one
       if (editingSession) {
         await apiUpdateSession(editingSession.id, {
           courseId: sessionData.courseId,
@@ -1102,7 +1177,7 @@ function App() {
           endTime: sessionData.endTime,
           durationMinutes: sessionData.durationMinutes,
           notes: sessionData.notes,
-          // Forward recurrence data when present
+          // Forward recurrence pattern if session is recurring
           ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
         });
       } else {
@@ -1118,35 +1193,41 @@ function App() {
           // Create recurrence pattern in backend if provided
           ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
         });
-        // TODO: Implement proper recurring server-side; currently we only create the single session
+        // TODO: Implement proper server-side recurring session generation
+        // Currently only creates single session with recurrence metadata
       }
+      
+      // Refresh data from backend to ensure consistency
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       setCourses(freshCourses as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
-      // Auto-activate course if planned
+      
+      // Auto-activate course if this is first session scheduled
       if (sessionData.courseId) {
         const course = freshCourses.find(c => c.id === sessionData.courseId);
         if (course && course.status === 'planned') {
+          // Transition: planned → active
           const token = localStorage.getItem('authToken');
           await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${course.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ status: 'active' }),
           });
+          // Refresh courses again to get updated status
           const again = await apiGetCourses();
-            setCourses(again as Course[]);
+          setCourses(again as Course[]);
         }
       }
     } catch (e) {
       console.error('Save session failed', e);
     }
     
-    // Clear state and close dialog
+    // Clean up state and close dialog
     setOriginalSessionBeforeMove(null);
     setEditingSession(undefined);
     setShowSessionDialog(false);
     
-    // Trigger auto-sync
+    // Trigger Google Calendar auto-sync
     setAutoSyncTrigger(Date.now());
   };
 

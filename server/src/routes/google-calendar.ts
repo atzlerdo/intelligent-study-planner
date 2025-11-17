@@ -1,3 +1,32 @@
+/**
+ * ============================================================================
+ * GOOGLE CALENDAR TOKEN API ROUTES
+ * ============================================================================
+ * 
+ * Backend routes for managing user-specific Google Calendar OAuth tokens.
+ * All routes require JWT authentication (user must be logged in).
+ * 
+ * Database Table: google_calendar_tokens
+ * - user_id (PK, FK to users.id)
+ * - access_token (OAuth access token)
+ * - refresh_token (for token renewal)
+ * - token_expiry (timestamp when token expires)
+ * - calendar_id (Google Calendar ID for "Intelligent Study Planner" calendar)
+ * - google_email (User's Google account email)
+ * - last_sync (timestamp of last successful sync)
+ * 
+ * Security:
+ * - Tokens stored per user (isolated by user_id)
+ * - JWT auth required for all operations
+ * - 404 response if user hasn't connected (prevents info leak)
+ * 
+ * Routes:
+ * - GET /api/google-calendar/token - Retrieve user's token
+ * - POST /api/google-calendar/token - Save/update token (upsert)
+ * - DELETE /api/google-calendar/token - Remove token (disconnect)
+ * - PATCH /api/google-calendar/token/last-sync - Update sync timestamp
+ */
+
 import express from 'express';
 import { z } from 'zod';
 import { dbWrapper } from '../db.js';
@@ -5,9 +34,13 @@ import { authMiddleware, AuthRequest } from '../auth.js';
 
 const router = express.Router();
 
-// All routes require authentication
+// All routes require authentication (JWT token in Authorization header)
 router.use(authMiddleware);
 
+/**
+ * Zod schema for validating Google Calendar token data
+ * Only accessToken is required; other fields are optional
+ */
 const tokenSchema = z.object({
   accessToken: z.string(),
   refreshToken: z.string().optional(),
@@ -16,7 +49,13 @@ const tokenSchema = z.object({
   googleEmail: z.string().optional(),
 });
 
-// Get user's Google Calendar token
+/**
+ * GET /api/google-calendar/token
+ * Retrieve current user's Google Calendar token
+ * 
+ * @returns 200 with token data if exists
+ * @returns 404 if user hasn't connected Google Calendar
+ */
 router.get('/token', (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -32,6 +71,7 @@ router.get('/token', (req: AuthRequest, res) => {
       return;
     }
 
+    // Return token data with camelCase field names
     res.json({
       accessToken: token.access_token,
       refreshToken: token.refresh_token,
@@ -46,7 +86,15 @@ router.get('/token', (req: AuthRequest, res) => {
   }
 });
 
-// Save/update user's Google Calendar token
+/**
+ * POST /api/google-calendar/token
+ * Save or update current user's Google Calendar token (upsert operation)
+ * 
+ * If token exists for user, updates it. Otherwise creates new record.
+ * 
+ * @body tokenSchema - Token data (accessToken required, others optional)
+ * @returns 200 with success message
+ */
 router.post('/token', (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -56,7 +104,7 @@ router.post('/token', (req: AuthRequest, res) => {
     const existing = dbWrapper.prepare('SELECT user_id FROM google_calendar_tokens WHERE user_id = ?').get(userId);
 
     if (existing) {
-      // Update existing token
+      // Update existing token (user reconnecting or refreshing token)
       dbWrapper.prepare(`
         UPDATE google_calendar_tokens
         SET access_token = ?, refresh_token = ?, token_expiry = ?, calendar_id = ?, google_email = ?, updated_at = ?
@@ -99,11 +147,20 @@ router.post('/token', (req: AuthRequest, res) => {
   }
 });
 
-// Delete user's Google Calendar token (disconnect)
+/**
+ * DELETE /api/google-calendar/token
+ * Disconnect Google Calendar for current user
+ * 
+ * Deletes token from database. Does NOT delete events from Google Calendar,
+ * only removes the connection.
+ * 
+ * @returns 200 with success message
+ */
 router.delete('/token', (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     
+    // Delete token record (CASCADE will not affect calendar events)
     dbWrapper.prepare('DELETE FROM google_calendar_tokens WHERE user_id = ?').run(userId);
     
     res.json({ success: true });
@@ -113,12 +170,21 @@ router.delete('/token', (req: AuthRequest, res) => {
   }
 });
 
-// Update last sync timestamp
+/**
+ * PATCH /api/google-calendar/token/last-sync
+ * Update last sync timestamp after successful sync
+ * 
+ * Called by GoogleCalendarSyncService after each sync to track sync history.
+ * Used to show "last synced X minutes ago" in UI.
+ * 
+ * @returns 200 with updated lastSync timestamp
+ */
 router.patch('/token/last-sync', (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     const now = Date.now();
     
+    // Update last_sync and updated_at timestamps
     dbWrapper.prepare(`
       UPDATE google_calendar_tokens
       SET last_sync = ?, updated_at = ?

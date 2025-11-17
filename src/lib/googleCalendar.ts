@@ -1,3 +1,38 @@
+/**
+ * ============================================================================
+ * GOOGLE CALENDAR INTEGRATION
+ * ============================================================================
+ * 
+ * Handles bidirectional synchronization between the study planner and Google Calendar.
+ * 
+ * ARCHITECTURE:
+ * - Creates dedicated "Intelligent Study Planner" calendar in user's Google account
+ * - Uses extendedProperties to store app metadata (sessionId, courseId, appSource)
+ * - Tracks sync state via localStorage (event hashes, sync tokens, remote cache)
+ * - Supports recurring events via RRule (RFC 5545 standard)
+ * 
+ * SYNC STRATEGY:
+ * 1. Push: Convert app sessions → Google Calendar events (create/update/delete)
+ * 2. Pull: Import Google Calendar events → app sessions (merge, not replace)
+ * 3. Conflict resolution: Google Calendar is source of truth for imported events
+ * 
+ * SYNC OPTIMIZATION:
+ * - Incremental sync using sync tokens (only fetch changes since last sync)
+ * - Event hashing to detect changes (skip updates if hash unchanged)
+ * - Limited time horizon (30 days past, 180 days future) for faster sync
+ * - Remote cache to track Google Calendar state
+ * 
+ * RECURRING EVENTS:
+ * - Parses RRULE from Google Calendar events
+ * - Stores as RecurringEventSeries with overrides for exceptions
+ * - Handles instance modifications (changed times, canceled occurrences)
+ * 
+ * TODO: Make localStorage keys user-specific (currently global per browser)
+ * This means switching browsers/users on same machine shares cache - security issue.
+ * 
+ * @see https://developers.google.com/calendar/api/v3/reference
+ */
+
 // Note: Blocker functionality has been replaced by unassigned sessions (ScheduledSession with no courseId)
 // This stub function is kept for backwards compatibility but is no longer used
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -6,14 +41,17 @@ import type { ScheduledSession, Course, RecurringEventSeries, SyncStats } from '
 
 declare const gapi: any;
 
-// Google Calendar API types
+/**
+ * Google Calendar event structure
+ * Extended properties store app-specific metadata for tracking session ownership
+ */
 interface CalendarEvent {
-  id?: string;
-  summary: string;
-  description?: string;
+  id?: string;                    // Google-generated event ID
+  summary: string;                // Event title (course name)
+  description?: string;           // Event notes
   start: {
-    dateTime: string;
-    timeZone: string;
+    dateTime: string;             // ISO 8601 datetime
+    timeZone: string;             // IANA timezone (e.g., "Europe/Berlin")
   };
   end: {
     dateTime: string;
@@ -21,24 +59,36 @@ interface CalendarEvent {
   };
   extendedProperties?: {
     private?: {
-      sessionId?: string;
-      courseId?: string;
-      appSource?: string;
-      originalTitle?: string;
+      sessionId?: string;         // App session ID for bidirectional linking
+      courseId?: string;          // Course ID (null for unassigned sessions)
+      appSource?: string;         // Always "intelligent-study-planner"
+      originalTitle?: string;     // Preserve original event title for non-app events
       originalDescription?: string;
     };
   };
 }
 
-// Calendar ID for storing study sessions
+// Dedicated calendar name for app events
 const STUDY_CALENDAR_NAME = 'Intelligent Study Planner';
 let studyCalendarId: string | null = null;
 
-// Tunable import/sync horizons (smaller window -> faster sync)
-const IMPORT_PAST_DAYS = 30; // previously 90
-const IMPORT_FUTURE_DAYS = 180; // previously 400
+/**
+ * Sync time horizon configuration
+ * Smaller windows = faster sync but less historical data
+ */
+const IMPORT_PAST_DAYS = 30;      // Look back 1 month
+const IMPORT_FUTURE_DAYS = 180;   // Look ahead 6 months
 
-// ---- Local storage helpers (browser) ----
+// ============================================================================
+// LOCALSTORAGE CACHE HELPERS
+// ============================================================================
+// TODO: Make these user-specific by including userId in keys
+// Currently these are browser-global, causing cache leakage across users
+
+/**
+ * Get value from localStorage with JSON parsing
+ * @returns Parsed value or fallback if not found/invalid
+ */
 function lsGet<T = any>(key: string, fallback: T): T {
   try {
     const v = localStorage.getItem(key);
@@ -47,13 +97,23 @@ function lsGet<T = any>(key: string, fallback: T): T {
     return fallback;
   }
 }
+
+/**
+ * Set value in localStorage with JSON serialization
+ * Silently fails if storage is unavailable
+ */
 function lsSet(key: string, value: any) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* ignore */
+    /* ignore quota errors */
   }
 }
+
+/**
+ * LocalStorage key generators
+ * These should include userId to prevent cache sharing across users
+ */
 function eventHashKey(calendarId: string) {
   return `googleCalendarEventHash::${calendarId}`;
 }
@@ -66,7 +126,14 @@ function remoteCacheKey(calendarId: string) {
 function syncStatsKey(calendarId: string) {
   return `googleCalendarSyncStats::${calendarId}`;
 }
-// Small deterministic hash (FNV-1a)
+
+/**
+ * Fast hash function (FNV-1a algorithm)
+ * Used to detect event changes without storing full event data
+ * 
+ * @param s String to hash (usually JSON-serialized event)
+ * @returns 8-character hex hash
+ */
 function hashString(s: string): string {
   let h = 2166136261 >>> 0;
   for (let i = 0; i < s.length; i++) {

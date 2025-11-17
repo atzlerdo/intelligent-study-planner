@@ -1,19 +1,35 @@
+/**
+ * Google Calendar Sync Service
+ * 
+ * Background service component that handles automatic synchronization between
+ * the app and Google Calendar. Runs independently of the CalendarSync UI dialog.
+ * 
+ * Features:
+ * - Loads Google Calendar OAuth token from backend on mount
+ * - Listens for token changes (connect/disconnect events)
+ * - Triggers automatic sync on session changes
+ * - Performs periodic sync every 5 minutes when connected
+ * - Syncs when user returns to tab after being away
+ * - Validates token before each sync
+ * - Updates last sync timestamp in backend after successful sync
+ */
+
 import { useEffect, useState, useRef } from 'react';
 import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
 import { getGoogleCalendarToken, deleteGoogleCalendarToken, updateLastSync } from '../lib/api';
 
 interface GoogleCalendarSyncServiceProps {
-  sessions: ScheduledSession[];
-  courses: Course[];
-  onSessionsImported?: (sessions: ScheduledSession[]) => void;
-  autoSyncTrigger?: number;
-  onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void;
+  sessions: ScheduledSession[];              // All scheduled sessions from app
+  courses: Course[];                         // All courses from app
+  onSessionsImported?: (sessions: ScheduledSession[]) => void;  // Callback when sessions imported from Google Calendar
+  autoSyncTrigger?: number;                  // Timestamp that changes to trigger auto-sync
+  onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void;  // Notify parent about sync state
 }
 
 /**
  * Background service that handles automatic Google Calendar syncing
- * This component is always mounted and handles sync even when the dialog is closed
+ * This component renders nothing (returns null) but handles sync logic
  */
 export function GoogleCalendarSyncService({
   sessions,
@@ -22,12 +38,19 @@ export function GoogleCalendarSyncService({
   autoSyncTrigger,
   onStateChange,
 }: GoogleCalendarSyncServiceProps) {
+  // State management
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const isConnected = !!accessToken;
 
-  // Load token from backend on mount
+  // ============================================================================
+  // Token Management - Load token from backend and listen for changes
+  // ============================================================================
   useEffect(() => {
+    /**
+     * Load Google Calendar token from backend database
+     * Called on mount and when token changes (connect/disconnect)
+     */
     const loadToken = async () => {
       try {
         const tokenData = await getGoogleCalendarToken();
@@ -35,7 +58,7 @@ export function GoogleCalendarSyncService({
           setAccessToken(tokenData.accessToken);
         }
       } catch (error) {
-        // Silently handle 404 (no token) to avoid console spam
+        // Silently handle 404 (no token) to avoid console spam when user hasn't connected
         if (error instanceof Error && !error.message.includes('404')) {
           console.error('Failed to load Google Calendar token:', error);
         }
@@ -43,7 +66,8 @@ export function GoogleCalendarSyncService({
     };
     loadToken();
 
-    // Listen for custom event when token is connected/disconnected
+    // Listen for custom event dispatched by CalendarSync component
+    // when user connects or disconnects Google Calendar
     const handleTokenChange = () => {
       loadToken();
     };
@@ -54,18 +78,36 @@ export function GoogleCalendarSyncService({
     };
   }, []);
 
-  // Notify parent about state changes
+  // Notify parent component about connection and sync state changes
   useEffect(() => {
     if (onStateChange) {
       onStateChange({ isConnected, isSyncing });
     }
   }, [isConnected, isSyncing, onStateChange]);
 
+  // ============================================================================
+  // Sync Logic - Perform two-way sync with Google Calendar
+  // ============================================================================
+  
+  /**
+   * Perform bidirectional sync with Google Calendar
+   * 
+   * Process:
+   * 1. Validate access token (refresh if needed)
+   * 2. Push app sessions to Google Calendar
+   * 3. Pull calendar events and convert to sessions
+   * 4. Update last sync timestamp in backend
+   * 5. Notify parent of imported sessions
+   * 
+   * If token is invalid, disconnects from backend and clears local state
+   */
   const handleSync = async () => {
+    // Skip if no token or already syncing
     if (!accessToken || isSyncing) return;
 
     setIsSyncing(true);
     try {
+      // Validate token before sync (refreshes token if expired)
       const tokenCheck = await validateAccessToken(accessToken);
       if (!tokenCheck.valid) {
         console.error('Token invalid, disconnecting from backend');
@@ -75,17 +117,19 @@ export function GoogleCalendarSyncService({
         return;
       }
 
+      // Perform two-way sync: app → Google Calendar and Google Calendar → app
       const result = await performTwoWaySync(sessions, courses, accessToken);
 
       if (result.success) {
+        // Update last sync timestamp in backend database
         try {
           await updateLastSync();
         } catch (e) {
           console.error('Failed to update last sync time:', e);
         }
 
+        // If sessions were imported from Google Calendar, notify parent to merge them
         if (result.importedFromCalendar.length > 0 && onSessionsImported) {
-          // Pass only sessions to keep prop signature (syncStartTime used internally if needed)
           onSessionsImported(result.importedFromCalendar);
         }
       } else {
@@ -98,10 +142,22 @@ export function GoogleCalendarSyncService({
     }
   };
 
-  // Auto-sync when autoSyncTrigger changes (session added/edited/deleted)
-  // Use a ref to prevent rapid re-syncs within 2 seconds
+  // ============================================================================
+  // Auto-Sync Triggers - When to automatically sync
+  // ============================================================================
+  
+  /**
+   * Debounce protection: Prevent rapid re-syncs within 2 seconds
+   * This prevents infinite loops when imported sessions trigger another sync
+   */
   const lastSyncTriggerRef = useRef<number>(0);
   
+  /**
+   * Auto-sync when sessions change (add/edit/delete)
+   * 
+   * The autoSyncTrigger prop is a timestamp that changes whenever the user
+   * modifies sessions. We debounce to prevent sync loops.
+   */
   useEffect(() => {
     if (autoSyncTrigger && isConnected && !isSyncing) {
       const now = Date.now();
@@ -120,13 +176,24 @@ export function GoogleCalendarSyncService({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSyncTrigger]);
 
-  // Periodic sync every 5-10 minutes when connected and tab is visible
+  /**
+   * Periodic sync every 5 minutes
+   * 
+   * Runs background sync when:
+   * - User is connected to Google Calendar
+   * - Tab is visible (respects document.visibilityState)
+   * - Not already syncing
+   * 
+   * This ensures changes made in Google Calendar web/mobile app
+   * are periodically pulled into the study planner.
+   */
   useEffect(() => {
     if (!isConnected || isSyncing) return;
 
-    // Configurable sync interval (default 5 minutes, can be adjusted)
-    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes for better performance
+    // Sync every 5 minutes (300,000 ms)
+    const SYNC_INTERVAL = 5 * 60 * 1000;
     const intervalId = setInterval(() => {
+      // Only sync if user is currently viewing the app
       if (document.visibilityState === 'visible') {
         console.log('🔄 Periodic auto-sync (5 min interval)');
         handleSync();
@@ -137,12 +204,22 @@ export function GoogleCalendarSyncService({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, isSyncing]);
 
-  // Sync when user returns to the tab
+  /**
+   * Sync when user returns to the app tab
+   * 
+   * Listens to document.visibilityState changes. When the user switches
+   * back to this tab after being away, triggers a sync after 1 second delay.
+   * 
+   * Use case: User made changes in Google Calendar mobile app, then returns
+   * to the study planner in their browser - changes are automatically pulled.
+   */
   useEffect(() => {
     if (!isConnected) return;
 
     const handleVisibilityChange = () => {
+      // Only sync when tab becomes visible (not when it becomes hidden)
       if (document.visibilityState === 'visible' && !isSyncing) {
+        // 1 second delay to avoid sync spam if user rapidly switches tabs
         setTimeout(() => {
           if (!isSyncing) {
             console.log('🔄 Auto-sync on tab return');
@@ -157,6 +234,6 @@ export function GoogleCalendarSyncService({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, isSyncing]);
 
-  // This component renders nothing - it's just a background service
+  // This component renders nothing - it's a pure logic/service component
   return null;
 }

@@ -1,3 +1,21 @@
+/**
+ * Google Calendar Sync Component (UI)
+ * 
+ * Provides user interface for connecting and managing Google Calendar integration.
+ * Handles OAuth flow, displays connection status, and allows manual sync/disconnect.
+ * 
+ * Features:
+ * - OAuth 2.0 login with @react-oauth/google
+ * - Connection status display (connected/disconnected)
+ * - Manual sync button for on-demand synchronization
+ * - Disconnect button to remove calendar integration
+ * - Last sync timestamp display
+ * - Token stored in backend database (user-specific)
+ * 
+ * Note: This component handles UI only. Automatic background sync is handled
+ * by GoogleCalendarSyncService.tsx which is always mounted.
+ */
+
 import { useState, useEffect } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
 import { Button } from './ui/button';
@@ -10,15 +28,18 @@ import { SyncStatsDisplay } from './SyncStatsDisplay';
 import { getGoogleCalendarToken, saveGoogleCalendarToken, deleteGoogleCalendarToken } from '../lib/api';
 
 interface CalendarSyncProps {
-  sessions: ScheduledSession[];
-  courses: Course[];
-  onSessionsImported?: (sessions: ScheduledSession[]) => void;
-  autoSyncTrigger?: number; // Timestamp to trigger auto-sync
-  onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void; // notify parent for icon indicator
+  sessions: ScheduledSession[];              // All scheduled sessions
+  courses: Course[];                         // All courses
+  onSessionsImported?: (sessions: ScheduledSession[]) => void;  // Callback when sessions imported
+  autoSyncTrigger?: number;                  // Timestamp that triggers auto-sync
+  onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void;  // Notify parent for UI indicators
 }
 
 export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTrigger, onStateChange }: CalendarSyncProps) {
-  // Token and sync state now loaded from backend
+  // ============================================================================
+  // State Management - Connection status and sync state
+  // ============================================================================
+  
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -29,7 +50,14 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     message: string;
   }>({ type: null, message: '' });
 
-  // Load token from backend on mount
+  // ============================================================================
+  // Token Management - Load from backend on mount
+  // ============================================================================
+  
+  /**
+   * Load Google Calendar token from backend database
+   * Runs once on component mount to restore connection state
+   */
   useEffect(() => {
     const loadToken = async () => {
       try {
@@ -50,14 +78,25 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     loadToken();
   }, []);
 
-  // Notify parent about state changes for icon indicator
+  /**
+   * Notify parent component about connection/sync state changes
+   * Used to show sync indicator icon in UI
+   */
   useEffect(() => {
     if (onStateChange) {
       onStateChange({ isConnected, isSyncing });
     }
   }, [isConnected, isSyncing, onStateChange]);
 
-  // Auto-sync when autoSyncTrigger changes (session added/edited/deleted)
+  // ============================================================================
+  // Auto-Sync Effects (NOTE: These are LEGACY - duplicated in GoogleCalendarSyncService)
+  // ============================================================================
+  
+  /**
+   * LEGACY: Auto-sync when autoSyncTrigger changes
+   * @deprecated This logic is duplicated in GoogleCalendarSyncService.tsx
+   * Kept here for backwards compatibility but should be removed in future refactor
+   */
   useEffect(() => {
     if (autoSyncTrigger && isConnected && !isSyncing) {
       handleSync();
@@ -65,13 +104,16 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSyncTrigger]);
 
-  // Periodic sync every 5 minutes when connected and tab is visible
+  /**
+   * LEGACY: Periodic sync every 5 minutes
+   * @deprecated This logic is duplicated in GoogleCalendarSyncService.tsx
+   * Kept here for backwards compatibility but should be removed in future refactor
+   */
   useEffect(() => {
     if (!isConnected || isSyncing) return;
 
-    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes for better performance
+    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes
     const intervalId = setInterval(() => {
-      // Only sync if tab is visible
       if (document.visibilityState === 'visible') {
         handleSync();
       }
@@ -81,13 +123,16 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, isSyncing]);
 
-  // Sync when user returns to the tab
+  /**
+   * LEGACY: Sync when user returns to tab
+   * @deprecated This logic is duplicated in GoogleCalendarSyncService.tsx
+   * Kept here for backwards compatibility but should be removed in future refactor
+   */
   useEffect(() => {
     if (!isConnected) return;
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && !isSyncing) {
-        // Add small delay to avoid immediate sync on tab switch
         setTimeout(() => {
           if (!isSyncing) {
             handleSync();
@@ -101,23 +146,40 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, isSyncing]);
 
+  // ============================================================================
+  // OAuth Login - Connect to Google Calendar
+  // ============================================================================
+  
+  /**
+   * Configure Google OAuth login hook
+   * Requests calendar scope and saves token to backend on success
+   */
   const login = useGoogleLogin({
+    /**
+     * Handle successful OAuth login
+     * 1. Validate token with Google API
+     * 2. Save to backend database
+     * 3. Update local state
+     * 4. Dispatch event to notify GoogleCalendarSyncService
+     */
     onSuccess: async (tokenResponse) => {
       try {
         const token = tokenResponse.access_token;
-        // Validate token early to provide clearer errors
+        
+        // Validate token early to provide clearer error messages
         const tokenCheck = await validateAccessToken(token);
         if (!tokenCheck.valid) {
           setSyncStatus({ type: 'error', message: `Invalid access token: ${tokenCheck.error || 'unknown error'}` });
           return;
         }
         
-        // Save token to backend
+        // Save token to backend (user-specific in database)
         await saveGoogleCalendarToken({
           accessToken: token,
           tokenExpiry: tokenResponse.expires_in ? Date.now() + tokenResponse.expires_in * 1000 : undefined,
         });
         
+        // Update local state to show connected status
         setAccessToken(token);
         setIsConnected(true);
         setSyncStatus({
@@ -125,14 +187,17 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
           message: 'Successfully connected to Google Calendar',
         });
         
-        // Notify other components that token has changed
+        // Dispatch custom event so GoogleCalendarSyncService can reload token
         window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
       } catch (e) {
         setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save token' });
       }
     },
+    /**
+     * Handle OAuth login failure
+     * Log error and show user-friendly message
+     */
     onError: (err) => {
-      // Surface more details if available
       const msg = err && typeof err === 'object' ? JSON.stringify(err) : 'Failed to connect to Google Calendar';
       setSyncStatus({
         type: 'error',
@@ -141,10 +206,28 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
       // eslint-disable-next-line no-console
       console.error('Google login error:', err);
     },
+    // Request calendar scope for read/write access
     scope: 'https://www.googleapis.com/auth/calendar',
   });
 
+  // ============================================================================
+  // Manual Sync - User-triggered sync via button
+  // ============================================================================
+  
+  /**
+   * Manually trigger sync with Google Calendar
+   * 
+   * Process:
+   * 1. Validate access token
+   * 2. Perform two-way sync (push app sessions, pull calendar events)
+   * 3. Update last sync timestamp
+   * 4. Notify parent of imported sessions
+   * 
+   * Note: This is the same sync logic as in GoogleCalendarSyncService,
+   * but triggered manually by user clicking "Sync Now" button.
+   */
   const handleSync = async () => {
+    // Guard: Must be connected first
     if (!accessToken) {
       setSyncStatus({
         type: 'error',
@@ -157,7 +240,7 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     setSyncStatus({ type: null, message: '' });
 
     try {
-      // Validate token again before syncing
+      // Validate token before syncing (token may have expired)
       const tokenCheck = await validateAccessToken(accessToken);
       if (!tokenCheck.valid) {
         setSyncStatus({ type: 'error', message: `Invalid/expired token: ${tokenCheck.error || 'unknown error'}. Please reconnect.` });
@@ -165,12 +248,14 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         return;
       }
 
+      // Perform bidirectional sync
       const result = await performTwoWaySync(sessions, courses, accessToken);
 
       if (result.success) {
         const syncTime = new Date();
         setLastSyncTime(syncTime);
-        // Save last sync time to backend (don't await to avoid blocking UI)
+        
+        // Update last sync time in backend (non-blocking)
         saveGoogleCalendarToken({
           accessToken: accessToken,
         }).catch(e => console.error('Failed to update last sync time:', e));
@@ -180,7 +265,7 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
           message: `Synced ${result.syncedToCalendar} sessions to calendar`,
         });
 
-        // If there are imported sessions, notify parent component
+        // Notify parent component about imported sessions to merge into app state
         if (onSessionsImported) {
           onSessionsImported(result.importedFromCalendar);
         }
@@ -202,17 +287,33 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     }
   };
 
+  // ============================================================================
+  // Disconnect - Remove Google Calendar integration
+  // ============================================================================
+  
+  /**
+   * Disconnect from Google Calendar
+   * 
+   * Process:
+   * 1. Delete token from backend database
+   * 2. Clear local state
+   * 3. Dispatch event to notify GoogleCalendarSyncService
+   * 
+   * Note: This does NOT delete events from Google Calendar,
+   * only removes the connection.
+   */
   const handleDisconnect = async () => {
     try {
-      // Delete token from backend
+      // Delete token from backend database
       await deleteGoogleCalendarToken();
       
+      // Clear local state
       setAccessToken(null);
       setIsConnected(false);
       setLastSyncTime(null);
       setSyncStatus({ type: null, message: '' });
       
-      // Notify other components that token has been removed
+      // Dispatch event so GoogleCalendarSyncService stops auto-syncing
       window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
     } catch (e) {
       console.error('Failed to disconnect:', e);

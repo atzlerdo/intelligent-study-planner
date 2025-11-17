@@ -6,11 +6,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Log files in logs folder (but keep the folder structure)
-logs/*.log
-logs/*.txt
-logs/**/*.log
-logs/**/*.txt
+# Exclude entire logs folder except .gitkeep
+logs/*
+!logs/.gitkeep
 
 node_modules
 dist
