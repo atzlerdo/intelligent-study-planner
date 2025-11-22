@@ -257,7 +257,6 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         type: 'error',
         message: msg,
       });
-      // eslint-disable-next-line no-console
       console.error('Google login error:', err);
     },
     // Request calendar scope for read/write access
@@ -334,7 +333,6 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         type: 'error',
         message: `Sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });
-      // eslint-disable-next-line no-console
       console.error('Sync error:', error);
     } finally {
       setIsSyncing(false);

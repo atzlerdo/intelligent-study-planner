@@ -142,11 +142,6 @@ router.post('/cleanup-users', (req: AuthRequest, res) => {
       return;
     }
     
-    // Count users to be deleted
-    const usersToDelete = dbWrapper.prepare(`
-      SELECT COUNT(*) as count FROM users WHERE id != ?
-    `).get(protectedUser.id) as { count: number };
-    
     // Delete all data for other users (CASCADE will handle related records)
     // The foreign key constraints with ON DELETE CASCADE will automatically delete:
     // - courses, scheduled_sessions, study_blocks, study_programs, google_calendar_tokens, etc.

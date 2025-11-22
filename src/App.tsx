@@ -769,7 +769,6 @@ function App() {
       }
     };
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Dialog states
@@ -853,11 +852,11 @@ function App() {
         });
         
         try {
-          // Update backend to match reality
-          await apiUpdateCourse(course.id, {
+          // Update backend to match reality using extended API (supports completedHours/progress)
+          await apiUpdateCourseExtended(course.id, {
             completedHours: actualHours,
             progress: newProgress,
-          } as any);
+          });
           
           // Update local course object
           updatedCourses.push({
@@ -938,8 +937,8 @@ function App() {
     console.log('Updating session with payload:', feedbackSession.id, payload);
 
     try {
-      // Persist the session update
-      await apiUpdateSession(feedbackSession.id, payload as any);
+      // Persist the session update (cast needed for dynamic payload structure)
+      await apiUpdateSession(feedbackSession.id, payload as Partial<typeof feedbackSession>);
 
       // Update course completedHours and progress on backend if applicable
       const targetCourseId = feedback.selectedCourseId || feedbackSession.courseId;
@@ -957,11 +956,11 @@ function App() {
             progress: newProgress
           });
           
-          // Persist to backend (backend supports completedHours and progress fields)
-          await apiUpdateCourse(targetCourseId, {
+          // Persist to backend using extended API (supports completedHours/progress)
+          await apiUpdateCourseExtended(targetCourseId, {
             completedHours: newCompletedHours,
             progress: newProgress,
-          } as any);
+          });
         }
       }
 
@@ -1247,8 +1246,9 @@ function App() {
       try {
         await apiDeleteSession(session.id);
         console.log('✅ Deleted missed session in backend:', session.id);
-      } catch (delErr: any) {
-        const msg = delErr?.message || '';
+      } catch (delErr: unknown) {
+        // Type guard for error object with message property
+        const msg = (delErr as { message?: string })?.message || '';
         if (msg.includes('Session not found')) {
           console.warn('⚠️ Missed session already absent (404), proceeding:', session.id);
           setScheduledSessions(prev => prev.filter(s => s.id !== session.id));
@@ -1358,7 +1358,8 @@ function App() {
         endTime: sessionData.endTime,
         course: sessionData.courseId,
         duration: sessionData.durationMinutes,
-        googleEventId: (sessionData as any).googleEventId
+        // googleEventId may exist on the full session but not in the Omit<> type
+        googleEventId: (sessionData as ScheduledSession).googleEventId
       },
       currentTime: new Date().toString()
     });
@@ -1378,7 +1379,8 @@ function App() {
       if (editingSession) {
         await apiUpdateSession(editingSession.id, {
           // For updates we include courseId only when assigning or clearing; otherwise omit
-          ...(courseIdForPayload !== undefined ? { courseId: courseIdForPayload as any } : {}),
+          // Type assertion needed because API accepts null but TypeScript expects string|undefined
+          ...(courseIdForPayload !== undefined ? { courseId: courseIdForPayload as string | undefined } : {}),
           studyBlockId: sessionData.studyBlockId,
           date: sessionData.date,
           startTime: sessionData.startTime,
@@ -1392,7 +1394,7 @@ function App() {
       } else {
         await apiCreateSession({
           // For creation omit courseId when unassigned so backend validation (string) doesn't reject null
-          ...(courseIdForPayload !== undefined && courseIdForPayload !== null ? { courseId: courseIdForPayload as any } : {}),
+          ...(courseIdForPayload !== undefined && courseIdForPayload !== null ? { courseId: courseIdForPayload } : {}),
           studyBlockId: sessionData.studyBlockId,
           date: sessionData.date,
           startTime: sessionData.startTime,
@@ -1512,7 +1514,8 @@ function App() {
       for (const course of freshCourses) {
         if (course.status === 'active' && !courseSessionCounts.has(course.id)) {
           try {
-            await apiUpdateCourse(course.id, { status: 'planned' } as any);
+            // Use extended API which supports status field
+            await apiUpdateCourseExtended(course.id, { status: 'planned' });
             console.log(`  📦 Deactivated course ${course.name} - no sessions remaining`);
           } catch (error) {
             console.error(`  ❌ Failed to deactivate course ${course.id}:`, error);
@@ -1525,8 +1528,9 @@ function App() {
       setCourses(finalCourses as Course[]);
       setScheduledSessions(finalSessions as ScheduledSession[]);
       console.log('  ✅ Courses and sessions refreshed from backend');
-    } catch (e: any) {
-      const msg = e?.message || '';
+    } catch (e: unknown) {
+      // Type guard for error object with message property
+      const msg = (e as { message?: string })?.message || '';
       if (msg.includes('Session not found')) {
         console.warn('  ⚠️ Backend reports session already missing (404). Removing locally:', sessionId);
         setScheduledSessions(prev => prev.filter(s => s.id !== sessionId));
@@ -1545,7 +1549,8 @@ function App() {
           for (const course of freshCourses) {
             if (course.status === 'active' && !courseSessionCounts.has(course.id)) {
               try {
-                await apiUpdateCourse(course.id, { status: 'planned' } as any);
+                // Use extended API which supports status field
+                await apiUpdateCourseExtended(course.id, { status: 'planned' });
                 console.log(`  📦 Deactivated course ${course.name} - no sessions remaining`);
               } catch (error) {
                 console.error(`  ❌ Failed to deactivate course ${course.id}:`, error);
@@ -1574,15 +1579,16 @@ function App() {
 
   // Bulk delete all sessions (user wants to reset calendar)
   const handleDeleteAllSessions = async () => {
-    console.log('🗑️ App: Bulk deleting ALL sessions');
     try {
+      console.log('🗑️ App: Bulk deleting ALL sessions');
       const existing = await apiGetSessions();
       for (const s of existing) {
         console.log('   → Deleting', s.id, s.courseId || '(unassigned)');
         try {
           await apiDeleteSession(s.id);
-        } catch (e: any) {
-          const msg = e?.message || '';
+        } catch (e: unknown) {
+          // Type guard for error object with message property
+          const msg = (e as { message?: string })?.message || '';
           if (msg.includes('Session not found')) {
             console.warn('     ⚠️ Already gone (404), ensuring local removal for:', s.id);
             setScheduledSessions(prev => prev.filter(sess => sess.id !== s.id));
@@ -1595,7 +1601,7 @@ function App() {
       setCourses(freshCourses as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
       console.log(`  ✅ Bulk delete complete (${existing.length} attempted)`);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('Bulk delete sessions failed', e);
     }
     setEditingSession(undefined);
@@ -1896,7 +1902,8 @@ function App() {
     // Persist status changes to backend for deactivated courses
     for (const courseId of coursesToDeactivate) {
       try {
-        await apiUpdateCourse(courseId, { status: 'planned' } as any);
+        // Use extended API which supports status field
+        await apiUpdateCourseExtended(courseId, { status: 'planned' });
         const course = courses.find(c => c.id === courseId);
         console.log(`✅ Deactivated course ${course?.name || courseId} on backend`);
       } catch (error) {

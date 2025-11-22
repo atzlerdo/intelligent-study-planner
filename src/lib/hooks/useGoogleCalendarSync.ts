@@ -37,7 +37,6 @@ export function useGoogleCalendarSync({ sessions, courses, onSessionsImported, a
     onError: (err) => {
       const msg = err && typeof err === 'object' ? JSON.stringify(err) : 'Failed to connect to Google Calendar';
       setSyncStatus({ type: 'error', message: msg });
-      // eslint-disable-next-line no-console
       console.error('Google login error:', err);
     },
     scope: 'https://www.googleapis.com/auth/calendar',
@@ -76,7 +75,6 @@ export function useGoogleCalendarSync({ sessions, courses, onSessionsImported, a
       }
     } catch (error) {
       setSyncStatus({ type: 'error', message: `Sync failed: ${error instanceof Error ? error.message : 'Unknown error'}` });
-      // eslint-disable-next-line no-console
       console.error('Sync error:', error);
     } finally {
       setIsSyncing(false);

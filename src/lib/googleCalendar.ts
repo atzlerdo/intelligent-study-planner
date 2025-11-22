@@ -442,7 +442,7 @@ export async function findExistingStudyCalendars(accessToken: string): Promise<C
  * 
  * Cache is keyed by accessToken to handle token changes (user logout/login).
  */
-let calendarCreationPromiseCache: Map<string, Promise<string>> = new Map();
+const calendarCreationPromiseCache: Map<string, Promise<string>> = new Map();
 
 /**
  * CRITICAL FIX (2024-11-22): Singleton pattern to prevent duplicate session sync
@@ -456,7 +456,7 @@ let calendarCreationPromiseCache: Map<string, Promise<string>> = new Map();
  * 
  * Cache key: Simple hash of session IDs sorted, to detect identical sync requests.
  */
-let syncSessionsPromiseCache: Map<string, Promise<any>> = new Map();
+const syncSessionsPromiseCache: Map<string, Promise<any>> = new Map();
 
 /**
  * Get or create dedicated study calendar
