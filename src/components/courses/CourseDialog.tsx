@@ -47,7 +47,7 @@ interface CourseDialogProps {
 
 export function CourseDialog({ open, onClose, onSave, course }: CourseDialogProps) {
   const [name, setName] = useState('');
-  const [type, setType] = useState<'written-exam' | 'project'>('written-exam');
+  const [type, setType] = useState<'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation'>('written-exam');
   const [ects, setEcts] = useState('5');
   const [hoursPerEcts, setHoursPerEcts] = useState('27.5');
   const [examDate, setExamDate] = useState(''); // ISO format
@@ -156,14 +156,18 @@ export function CourseDialog({ open, onClose, onSave, course }: CourseDialogProp
             <Label htmlFor="type">Typ *</Label>
             <Select
               value={type}
-              onValueChange={(val: 'written-exam' | 'project') => setType(val)}
+              onValueChange={(val: 'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation') => setType(val)}
             >
               <SelectTrigger id="type">
-                <SelectValue />
+                <SelectValue placeholder="Prüfungstyp wählen" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="z-[200]">
                 <SelectItem value="written-exam">Schriftliche Prüfung</SelectItem>
+                <SelectItem value="oral-exam">Mündliche Prüfung</SelectItem>
+                <SelectItem value="online-exam">Online-Prüfung</SelectItem>
                 <SelectItem value="project">Projekt</SelectItem>
+                <SelectItem value="assignment">Hausarbeit</SelectItem>
+                <SelectItem value="presentation">Präsentation</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -224,7 +228,11 @@ export function CourseDialog({ open, onClose, onSave, course }: CourseDialogProp
 
             <div className="space-y-2">
               <Label htmlFor="examDate">
-                {type === 'written-exam' ? 'Prüfungsdatum' : 'Abgabedatum'}
+                {type === 'written-exam' || type === 'oral-exam' || type === 'online-exam' 
+                  ? 'Prüfungsdatum' 
+                  : type === 'presentation' 
+                  ? 'Präsentationstermin'
+                  : 'Abgabedatum'}
               </Label>
               <Input
                 id="examDate"

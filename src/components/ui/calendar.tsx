@@ -241,13 +241,15 @@ export function Calendar({
                     disabled={isDisabled}
                     onClick={() => handleSelect(date)}
                     className={cn(
-                      "h-9 w-9 m-[2px] flex items-center justify-center rounded-md text-sm",
+                      "h-9 w-9 m-[2px] flex items-center justify-center rounded-full text-sm",
                       outside ? "text-muted-foreground/70" : "",
                       isDisabled ? "opacity-50 cursor-not-allowed" : "",
-                      isSelected
-                        ? "bg-primary text-primary-foreground"
+                      isSelected && isToday
+                        ? "bg-blue-500 ring-2 ring-red-500 text-white"
+                        : isSelected
+                        ? "ring-2 ring-red-500 text-foreground hover:bg-accent"
                         : isToday
-                        ? "ring-1 ring-blue-500 text-foreground"
+                        ? "bg-blue-500 text-white hover:bg-blue-600"
                         : "hover:bg-accent"
                     )}
                     aria-pressed={isSelected}

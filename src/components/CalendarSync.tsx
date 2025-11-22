@@ -22,10 +22,11 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Calendar, CheckCircle, XCircle, RefreshCw, LogIn } from 'lucide-react';
-import { performTwoWaySync, validateAccessToken } from '../lib/googleCalendar';
+import { performTwoWaySync, validateAccessToken, findExistingStudyCalendars, setActiveCalendar } from '../lib/googleCalendar';
 import type { ScheduledSession, Course } from '../types';
 import { SyncStatsDisplay } from './SyncStatsDisplay';
 import { getGoogleCalendarToken, saveGoogleCalendarToken, deleteGoogleCalendarToken } from '../lib/api';
+import { CalendarSelectionDialog } from './CalendarSelectionDialog';
 
 interface CalendarSyncProps {
   sessions: ScheduledSession[];              // All scheduled sessions
@@ -49,6 +50,15 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
     type: 'success' | 'error' | null;
     message: string;
   }>({ type: null, message: '' });
+  
+  // Calendar selection dialog state
+  const [showCalendarDialog, setShowCalendarDialog] = useState(false);
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
+  const [existingCalendars, setExistingCalendars] = useState<Array<{
+    id: string;
+    summary: string;
+    description?: string;
+  }>>([]);
 
   // ============================================================================
   // Token Management - Load from backend on mount
@@ -151,16 +161,62 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
   // ============================================================================
   
   /**
+   * Complete the connection after user selects calendar
+   */
+  const completeConnection = async (token: string) => {
+    try {
+      // Save token to backend (user-specific in database)
+      await saveGoogleCalendarToken({
+        accessToken: token,
+      });
+      
+      // Update local state to show connected status
+      setAccessToken(token);
+      setIsConnected(true);
+      setSyncStatus({
+        type: 'success',
+        message: 'Successfully connected to Google Calendar',
+      });
+      
+      // Dispatch custom event so GoogleCalendarSyncService can reload token
+      window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
+    } catch (e) {
+      setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save token' });
+    }
+  };
+
+  /**
+   * Handle calendar selection from dialog
+   */
+  const handleCalendarSelection = async (selection: string) => {
+    if (!pendingToken) return;
+    
+    if (selection === 'create-new') {
+      // User wants to create a new calendar - clear any cached ID
+      localStorage.removeItem('googleCalendarStudyCalendarId');
+      console.log('🆕 User chose to create new calendar');
+    } else {
+      // User selected an existing calendar
+      setActiveCalendar(selection);
+      console.log('✅ User selected existing calendar:', selection);
+    }
+    
+    // Complete the connection
+    await completeConnection(pendingToken);
+    setPendingToken(null);
+  };
+
+  /**
    * Configure Google OAuth login hook
-   * Requests calendar scope and saves token to backend on success
+   * Requests calendar scope and checks for existing calendars before connecting
    */
   const login = useGoogleLogin({
     /**
      * Handle successful OAuth login
      * 1. Validate token with Google API
-     * 2. Save to backend database
-     * 3. Update local state
-     * 4. Dispatch event to notify GoogleCalendarSyncService
+     * 2. Check for existing calendars
+     * 3. Show dialog if calendars exist, otherwise auto-connect
+     * 4. Save to backend database after user choice
      */
     onSuccess: async (tokenResponse) => {
       try {
@@ -173,24 +229,22 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
           return;
         }
         
-        // Save token to backend (user-specific in database)
-        await saveGoogleCalendarToken({
-          accessToken: token,
-          tokenExpiry: tokenResponse.expires_in ? Date.now() + tokenResponse.expires_in * 1000 : undefined,
-        });
+        // Check if calendars with the same name already exist
+        const calendars = await findExistingStudyCalendars(token);
         
-        // Update local state to show connected status
-        setAccessToken(token);
-        setIsConnected(true);
-        setSyncStatus({
-          type: 'success',
-          message: 'Successfully connected to Google Calendar',
-        });
-        
-        // Dispatch custom event so GoogleCalendarSyncService can reload token
-        window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
+        if (calendars.length > 0) {
+          // Show dialog to let user choose
+          console.log(`📋 Found ${calendars.length} existing calendar(s), showing selection dialog`);
+          setExistingCalendars(calendars);
+          setPendingToken(token);
+          setShowCalendarDialog(true);
+        } else {
+          // No existing calendars, proceed directly
+          console.log('🆕 No existing calendars found, will create new one');
+          await completeConnection(token);
+        }
       } catch (e) {
-        setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save token' });
+        setSyncStatus({ type: 'error', message: e instanceof Error ? e.message : 'Failed to connect' });
       }
     },
     /**
@@ -313,6 +367,12 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
       setLastSyncTime(null);
       setSyncStatus({ type: null, message: '' });
       
+      // CRITICAL FIX (2024-11-22): Clear cached calendar ID from localStorage
+      // Without this, reconnecting would reuse the old calendar ID even if
+      // the user deleted that calendar from Google Calendar
+      localStorage.removeItem('googleCalendarStudyCalendarId');
+      console.log('🗑️ Cleared cached calendar ID from localStorage');
+      
       // Dispatch event so GoogleCalendarSyncService stops auto-syncing
       window.dispatchEvent(new CustomEvent('googleCalendarTokenChanged'));
     } catch (e) {
@@ -322,6 +382,7 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
   };
 
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
@@ -408,5 +469,14 @@ export function CalendarSync({ sessions, courses, onSessionsImported, autoSyncTr
         )}
       </CardContent>
     </Card>
+
+    {/* Calendar Selection Dialog */}
+    <CalendarSelectionDialog
+      open={showCalendarDialog}
+      onOpenChange={setShowCalendarDialog}
+      existingCalendars={existingCalendars}
+      onSelect={handleCalendarSelection}
+    />
+  </>
   );
 }

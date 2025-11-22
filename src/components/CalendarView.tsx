@@ -16,6 +16,7 @@ interface CalendarViewProps {
   courses: Course[];
   onAddSession: () => void;
   onEditSession: (session: ScheduledSession) => void;
+  onDeleteAllSessions?: () => void;
   onDeleteSession: (sessionId: string) => void;
   onViewChange: (view: 'dashboard' | 'courses' | 'calendar') => void;
 }
@@ -25,6 +26,7 @@ export function CalendarView({
   courses, 
   onAddSession,
   onEditSession,
+  onDeleteAllSessions,
   onViewChange
 }: CalendarViewProps) {
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
@@ -109,6 +111,11 @@ export function CalendarView({
             <Plus className="w-4 h-4 mr-2" />
             Session
           </Button>
+          {sessions.length > 0 && onDeleteAllSessions && (
+            <Button onClick={onDeleteAllSessions} size="sm" variant="destructive" className="bg-red-600 hover:bg-red-700">
+              Alle löschen
+            </Button>
+          )}
           
           {/* Navigation Menu - Top Right (Mobile Only) */}
           <div className="lg:hidden">

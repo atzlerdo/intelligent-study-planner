@@ -177,7 +177,7 @@ export function SessionFeedbackDialog({
                 <SelectTrigger>
                   <SelectValue placeholder="Kurs auswählen..." />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="z-[200]">
                   {courses
                     .filter(c => c.status !== 'completed')
                     .map(c => (

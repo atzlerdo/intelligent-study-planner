@@ -23,6 +23,7 @@ interface GoogleCalendarSyncServiceProps {
   sessions: ScheduledSession[];              // All scheduled sessions from app
   courses: Course[];                         // All courses from app
   onSessionsImported?: (sessions: ScheduledSession[]) => void;  // Callback when sessions imported from Google Calendar
+  onSessionsDeleted?: (sessionIds: string[]) => void;  // Callback when sessions deleted from Google Calendar
   autoSyncTrigger?: number;                  // Timestamp that changes to trigger auto-sync
   onStateChange?: (state: { isConnected: boolean; isSyncing: boolean }) => void;  // Notify parent about sync state
 }
@@ -35,6 +36,7 @@ export function GoogleCalendarSyncService({
   sessions,
   courses,
   onSessionsImported,
+  onSessionsDeleted,
   autoSyncTrigger,
   onStateChange,
 }: GoogleCalendarSyncServiceProps) {
@@ -89,6 +91,10 @@ export function GoogleCalendarSyncService({
   // Sync Logic - Perform two-way sync with Google Calendar
   // ============================================================================
   
+  // Ref to track if a sync is currently in progress (prevents concurrent syncs)
+  const syncInProgressRef = useRef(false);
+  const lastSyncTimeRef = useRef<number>(0);
+
   /**
    * Perform bidirectional sync with Google Calendar
    * 
@@ -100,12 +106,33 @@ export function GoogleCalendarSyncService({
    * 5. Notify parent of imported sessions
    * 
    * If token is invalid, disconnects from backend and clears local state
+   * 
+   * Protection against concurrent syncs:
+   * - Uses both state (isSyncing) and ref (syncInProgressRef) for double protection
+   * - State updates can be delayed in React, ref is immediate
+   * - Critical for React StrictMode which mounts components twice in development
    */
   const handleSync = async () => {
-    // Skip if no token or already syncing
-    if (!accessToken || isSyncing) return;
+    // Skip if no token or already syncing (check both state and ref)
+    if (!accessToken || isSyncing || syncInProgressRef.current) {
+      if (syncInProgressRef.current) {
+        console.log('⏸️ Sync already in progress, skipping duplicate sync request');
+      }
+      return;
+    }
 
+    // Prevent rapid successive syncs (minimum 1 second between syncs)
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < 1000) {
+      console.log('⏸️ Sync rate-limited (< 1s since last sync)');
+      return;
+    }
+
+    // Set both state and ref immediately to prevent concurrent syncs
+    syncInProgressRef.current = true;
     setIsSyncing(true);
+    lastSyncTimeRef.current = now;
+
     try {
       // Validate token before sync (refreshes token if expired)
       const tokenCheck = await validateAccessToken(accessToken);
@@ -113,7 +140,6 @@ export function GoogleCalendarSyncService({
         console.error('Token invalid, disconnecting from backend');
         await deleteGoogleCalendarToken();
         setAccessToken(null);
-        setIsSyncing(false);
         return;
       }
 
@@ -132,12 +158,20 @@ export function GoogleCalendarSyncService({
         if (result.importedFromCalendar.length > 0 && onSessionsImported) {
           onSessionsImported(result.importedFromCalendar);
         }
+
+        // If sessions were deleted from Google Calendar, notify parent to delete them
+        if (result.deletedSessionIds.length > 0 && onSessionsDeleted) {
+          console.log('🗑️ GoogleCalendarSyncService: Notifying App to delete sessions:', result.deletedSessionIds);
+          onSessionsDeleted(result.deletedSessionIds);
+        }
       } else {
         console.error('Sync failed:', result.error);
       }
     } catch (error) {
       console.error('Sync error:', error);
     } finally {
+      // Clear both sync guards
+      syncInProgressRef.current = false;
       setIsSyncing(false);
     }
   };

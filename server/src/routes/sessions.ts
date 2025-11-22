@@ -6,6 +6,37 @@ import { authMiddleware, AuthRequest } from '../auth.js';
 const router = express.Router();
 router.use(authMiddleware);
 
+/**
+ * Recalculate and update scheduledHours for a course based on all its sessions
+ * This should be called after any session create/update/delete operation
+ */
+function recalculateScheduledHours(courseId: string, userId: string) {
+  if (!courseId) return; // Skip if no course assigned
+  
+  try {
+    // Sum up all INCOMPLETE session durations for this course
+    // Completed sessions should not count toward "scheduled hours" (they're already in "completed hours")
+    const result = dbWrapper.prepare(`
+      SELECT SUM(duration_minutes) as total_minutes
+      FROM scheduled_sessions
+      WHERE course_id = ? AND user_id = ? AND completed = 0
+    `).get(courseId, userId) as { total_minutes: number | null };
+    
+    const totalHours = result.total_minutes ? result.total_minutes / 60 : 0;
+    
+    // Update the course's scheduled_hours
+    dbWrapper.prepare(`
+      UPDATE courses
+      SET scheduled_hours = ?
+      WHERE id = ? AND user_id = ?
+    `).run(totalHours, courseId, userId);
+    
+    console.log(`✅ Recalculated scheduledHours for course ${courseId}: ${totalHours} hours (incomplete sessions only)`);
+  } catch (error) {
+    console.error(`❌ Failed to recalculate scheduledHours for course ${courseId}:`, error);
+  }
+}
+
 const sessionSchema = z.object({
   courseId: z.string().optional(),
   studyBlockId: z.string(),
@@ -102,6 +133,11 @@ router.post('/', (req: AuthRequest, res) => {
       );
     }
 
+    // Recalculate scheduledHours for the course
+    if (data.courseId) {
+      recalculateScheduledHours(data.courseId, req.user!.userId);
+    }
+
     const session = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(sessionId);
     res.status(201).json(session);
   } catch (error) {
@@ -169,6 +205,19 @@ router.put('/:id', (req: AuthRequest, res) => {
       );
     }
 
+    // Recalculate scheduledHours for old and new course assignments
+    const oldCourseId = (session as any).course_id;
+    const newCourseId = req.body.courseId;
+    
+    if (oldCourseId && oldCourseId !== newCourseId) {
+      // Session moved away from old course
+      recalculateScheduledHours(oldCourseId, req.user!.userId);
+    }
+    if (newCourseId) {
+      // Session assigned to new course
+      recalculateScheduledHours(newCourseId, req.user!.userId);
+    }
+
     const updated = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(req.params.id);
     res.json(updated);
   } catch (error) {
@@ -180,6 +229,18 @@ router.put('/:id', (req: AuthRequest, res) => {
 // Delete session
 router.delete('/:id', (req: AuthRequest, res) => {
   try {
+    // Get session before deleting to recalculate course hours
+    const session = dbWrapper.prepare(`
+      SELECT * FROM scheduled_sessions WHERE id = ? AND user_id = ?
+    `).get(req.params.id, req.user!.userId) as any;
+
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    const courseId = session.course_id;
+
     const result = dbWrapper.prepare(`
       DELETE FROM scheduled_sessions WHERE id = ? AND user_id = ?
     `).run(req.params.id, req.user!.userId);
@@ -187,6 +248,11 @@ router.delete('/:id', (req: AuthRequest, res) => {
     if (result.changes === 0) {
       res.status(404).json({ error: 'Session not found' });
       return;
+    }
+
+    // Recalculate scheduledHours for the course
+    if (courseId) {
+      recalculateScheduledHours(courseId, req.user!.userId);
     }
 
     res.status(204).send();

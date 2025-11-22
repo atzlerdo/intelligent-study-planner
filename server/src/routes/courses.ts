@@ -11,7 +11,7 @@ router.use(authMiddleware);
 // Base schema for creating/updating core editable fields
 const courseSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(['written-exam', 'project']),
+  type: z.enum(['written-exam', 'oral-exam', 'project', 'assignment', 'online-exam', 'presentation']),
   ects: z.number().positive(),
   estimatedHours: z.number().positive(),
   estimatedEndDate: z.string(),

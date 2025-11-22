@@ -184,7 +184,7 @@ export function logout() {
 export interface Course {
   id: string;
   name: string;
-  type: 'written-exam' | 'project';
+  type: 'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation';
   ects: number;
   estimatedHours: number;
   completedHours: number;
@@ -207,7 +207,7 @@ export interface Course {
 /** Data required to create a new course */
 export interface CreateCourseData {
   name: string;
-  type: 'written-exam' | 'project';
+  type: 'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation';
   ects: number;
   estimatedHours: number;
   estimatedEndDate: string;
@@ -394,7 +394,7 @@ export async function migrateIfEmpty(legacy: {
   courses: Array<{
     id: string;
     name: string;
-    type: 'written-exam' | 'project';
+    type: 'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation';
     ects: number;
     estimatedHours: number;
     completedHours: number;
@@ -552,4 +552,43 @@ export async function updateLastSync(): Promise<number> {
     method: 'PATCH',
   });
   return result.lastSync;
+}
+
+/**
+ * Admin: Recalculate scheduledHours for all courses
+ * This fixes courses that have completed sessions incorrectly counted in scheduledHours
+ * @returns Result summary with details for each course
+ */
+export async function recalculateAllCourses(): Promise<{
+  message: string;
+  total: number;
+  successful: number;
+  errors: number;
+  details: Array<{
+    courseId: string;
+    courseName: string;
+    success: boolean;
+    hours?: number;
+    error?: string;
+  }>;
+}> {
+  return fetchAPI('/admin/recalculate-all-courses', {
+    method: 'POST',
+  });
+}
+
+/**
+ * Admin: Clean up all users except atzlerdo@gmail.com
+ * Deletes all users and their data (CASCADE deletes related records)
+ * @returns Result summary with count of deleted users
+ */
+export async function cleanupUsers(): Promise<{
+  message: string;
+  deletedUsers: number;
+  protectedEmail: string;
+  protectedUserId: string;
+}> {
+  return fetchAPI('/admin/cleanup-users', {
+    method: 'POST',
+  });
 }

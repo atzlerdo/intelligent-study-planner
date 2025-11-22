@@ -3,7 +3,7 @@
 export interface Course {
   id: string;
   name: string;
-  type: 'written-exam' | 'project';
+  type: 'written-exam' | 'oral-exam' | 'project' | 'assignment' | 'online-exam' | 'presentation';
   ects: number; // ECTS credits for this course
   estimatedHours: number;
   completedHours: number;

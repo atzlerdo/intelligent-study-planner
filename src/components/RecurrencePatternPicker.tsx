@@ -85,9 +85,9 @@ export function RecurrencePatternPicker({ value, onChange, startDate }: Recurren
             onValueChange={(value) => handleUpdate({ frequency: value as RecurrencePattern['frequency'] })}
           >
             <SelectTrigger className="flex-1">
-              <SelectValue />
+              <SelectValue placeholder="Frequenz wählen" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="z-[200]">
               <SelectItem value="DAILY">Tag(e)</SelectItem>
               <SelectItem value="WEEKLY">Woche(n)</SelectItem>
               <SelectItem value="MONTHLY">Monat(e)</SelectItem>

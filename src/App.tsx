@@ -33,7 +33,7 @@
  * - Multi-day session support (sessions spanning midnight)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { SessionAttendanceDialog } from './components/sessions/SessionAttendanceDialog';
 import { SessionFeedbackDialog } from './components/sessions/SessionFeedbackDialog';
@@ -57,7 +57,7 @@ import {
   AlertDialogTitle,
 } from './components/ui/alert-dialog';
 import type { Course, StudyBlock, StudyProgram, ScheduledSession } from './types/index';
-import { isAuthenticated, migrateIfEmpty, logout, createCourse as apiCreateCourse, updateCourse as apiUpdateCourse, deleteCourse as apiDeleteCourse, createSession as apiCreateSession, updateSession as apiUpdateSession, deleteSession as apiDeleteSession, getCourses as apiGetCourses, getSessions as apiGetSessions, getStudyProgram as apiGetStudyProgram, updateStudyProgram as apiUpdateStudyProgram } from './lib/api';
+import { isAuthenticated, migrateIfEmpty, logout, createCourse as apiCreateCourse, updateCourse as apiUpdateCourse, updateCourseExtended as apiUpdateCourseExtended, deleteCourse as apiDeleteCourse, createSession as apiCreateSession, updateSession as apiUpdateSession, deleteSession as apiDeleteSession, getCourses as apiGetCourses, getSessions as apiGetSessions, getStudyProgram as apiGetStudyProgram, updateStudyProgram as apiUpdateStudyProgram } from './lib/api';
 import type { AuthResponse } from './lib/api';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { calculateWeeklyAvailableMinutes, calculateEstimatedEndDate, calculateDuration } from './lib/scheduler';
@@ -733,6 +733,9 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const dominickEmail = (import.meta.env.VITE_ADMIN_EMAIL as string) || 'atzlerdo@gmail.com';
+  
+  // Track if we've already checked for past sessions on this login session
+  const hasCheckedPastSessions = useRef(false);
 
   useEffect(() => {
     const run = async () => {
@@ -744,7 +747,16 @@ function App() {
       setMigrating(true);
       try {
         const [courses, sessions, program] = await Promise.all([apiGetCourses(), apiGetSessions(), apiGetStudyProgram()]);
-        setCourses(courses as Course[]);
+        
+        // CRITICAL: Recalculate completedHours from actual session data to ensure DB matches UI
+        // This ensures data integrity after page reload and prevents visual discrepancies
+        console.log('🔍 Verifying course completedHours match attended sessions...');
+        const recalculatedCourses = await recalculateCourseHoursFromSessions(
+          courses as Course[], 
+          sessions as ScheduledSession[]
+        );
+        
+        setCourses(recalculatedCourses);
         setScheduledSessions(sessions as ScheduledSession[]);
         setStudyProgram(program);
       } catch (e) {
@@ -771,13 +783,15 @@ function App() {
   const [originalSessionBeforeMove, setOriginalSessionBeforeMove] = useState<ScheduledSession | null>(null);
   const [previewSession, setPreviewSession] = useState<ScheduledSession | null>(null);
 
-  // Check for past unevaluated sessions on startup
+  // Check for past unevaluated sessions on startup (only once per login session)
   useEffect(() => {
-    if (authChecked && !migrating && scheduledSessions.length > 0 && !showOnboarding) {
+    if (authChecked && !migrating && scheduledSessions.length > 0 && !showOnboarding && !hasCheckedPastSessions.current) {
       const pastSessions = getPastUnevaluatedSessions();
       if (pastSessions.length > 0) {
         setShowPastSessionsReview(true);
       }
+      // Mark as checked so we don't show again until next login
+      hasCheckedPastSessions.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authChecked, migrating, scheduledSessions.length, showOnboarding]);
@@ -791,6 +805,88 @@ function App() {
 
   // Calculate weekly capacity
   const weeklyCapacity = calculateWeeklyAvailableMinutes(studyBlocks);
+
+  /**
+   * Recalculate course completedHours from attended sessions in the database
+   * This ensures the backend data matches what the user sees in the UI
+   * CRITICAL: Called on page load to fix any inconsistencies from previous bugs
+   */
+  const recalculateCourseHoursFromSessions = async (
+    courses: Course[],
+    sessions: ScheduledSession[]
+  ): Promise<Course[]> => {
+    console.log('📊 Starting course hours recalculation from session data...');
+    
+    // Group sessions by course and calculate actual completed hours
+    const actualCompletedHoursByCourse = new Map<string, number>();
+    
+    for (const session of sessions) {
+      // Only count attended sessions assigned to a course
+      if (session.completed && session.courseId) {
+        const currentHours = actualCompletedHoursByCourse.get(session.courseId) || 0;
+        const sessionHours = session.durationMinutes / 60;
+        actualCompletedHoursByCourse.set(session.courseId, currentHours + sessionHours);
+      }
+    }
+    
+    // Check each course and update if backend value doesn't match actual
+    const updatedCourses: Course[] = [];
+    let correctionCount = 0;
+    
+    for (const course of courses) {
+      const actualHours = actualCompletedHoursByCourse.get(course.id) || 0;
+      const dbHours = course.completedHours;
+      
+      // Round to 2 decimal places for comparison to avoid floating point issues
+      const actualRounded = Math.round(actualHours * 100) / 100;
+      const dbRounded = Math.round(dbHours * 100) / 100;
+      
+      if (actualRounded !== dbRounded) {
+        // Mismatch detected - update backend
+        const newProgress = Math.min(Math.round((actualHours / course.estimatedHours) * 100), 100);
+        
+        console.warn(`⚠️ Course "${course.name}" completedHours mismatch:`, {
+          database: dbHours,
+          actualFromSessions: actualHours,
+          difference: actualHours - dbHours,
+          newProgress
+        });
+        
+        try {
+          // Update backend to match reality
+          await apiUpdateCourse(course.id, {
+            completedHours: actualHours,
+            progress: newProgress,
+          } as any);
+          
+          // Update local course object
+          updatedCourses.push({
+            ...course,
+            completedHours: actualHours,
+            progress: newProgress,
+          });
+          
+          correctionCount++;
+          console.log(`✅ Corrected course "${course.name}" completedHours: ${dbHours} → ${actualHours}`);
+        } catch (error) {
+          console.error(`❌ Failed to update course ${course.id}:`, error);
+          // Keep original course if update fails
+          updatedCourses.push(course);
+        }
+      } else {
+        // No correction needed
+        updatedCourses.push(course);
+      }
+    }
+    
+    if (correctionCount > 0) {
+      console.log(`✅ Corrected ${correctionCount} course(s) to match attended session hours`);
+    } else {
+      console.log('✅ All course completedHours match attended sessions - no corrections needed');
+    }
+    
+    return updatedCourses;
+  };
 
   // Get past sessions that need evaluation
   const getPastUnevaluatedSessions = (): ScheduledSession[] => {
@@ -814,7 +910,7 @@ function App() {
   };
 
   // Session feedback handler
-  const handleSessionFeedback = (feedback: { 
+  const handleSessionFeedback = async (feedback: { 
     sessionId: string; 
     completed: boolean; 
     completedHours: number;
@@ -823,83 +919,90 @@ function App() {
     newMilestones?: string[];
     selectedCourseId?: string;
   }) => {
-    // If this is an unassigned session with a selected course, assign it
-    if (feedback.selectedCourseId && feedbackSession && !feedbackSession.courseId) {
-      const updatedSession = { ...feedbackSession, courseId: feedback.selectedCourseId };
-      setFeedbackSession(updatedSession);
-      
-      // Update the session in scheduledSessions
-      setScheduledSessions(prev => prev.map(s => 
-        s.id === feedbackSession.id 
-          ? { 
-              ...updatedSession,
-              completed: feedback.completed,
-              completionPercentage: feedback.selfAssessmentProgress 
-            }
-          : s
-      ));
-
-      // Activate the course if it's in 'planned' status
-      setCourses(prev => prev.map(c => 
-        c.id === feedback.selectedCourseId && c.status === 'planned'
-          ? { ...c, status: 'active' }
-          : c
-      ));
-
-      console.log('Assigned course to unassigned session:', feedback.selectedCourseId, feedbackSession.id);
-    } else {
-      // Update the session normally (for already assigned sessions)
-      setScheduledSessions(prev => prev.map(session => 
-        session.id === feedback.sessionId 
-          ? { 
-              ...session, 
-              completed: feedback.completed,
-              completionPercentage: feedback.selfAssessmentProgress 
-            } 
-          : session
-      ));
+    if (!feedbackSession) {
+      console.warn('handleSessionFeedback called without an active feedbackSession');
+      return;
     }
 
-    // Update course progress and milestones
-    setCourses(prevCourses => {
-      return prevCourses.map(course => {
-        const targetCourseId = feedback.selectedCourseId || feedbackSession?.courseId;
-        if (feedbackSession && course.id === targetCourseId) {
-          const newCompletedHours = course.completedHours + feedback.completedHours;
-          const newProgress = Math.round((newCompletedHours / course.estimatedHours) * 100);
+    // Build payload for update
+    const payload: Record<string, unknown> = {
+      completed: feedback.completed,
+      completionPercentage: feedback.selfAssessmentProgress,
+    };
+
+    // If user selected a course for an unassigned session, include it
+    if (feedback.selectedCourseId && !feedbackSession.courseId) {
+      payload.courseId = feedback.selectedCourseId;
+    }
+
+    console.log('Updating session with payload:', feedbackSession.id, payload);
+
+    try {
+      // Persist the session update
+      await apiUpdateSession(feedbackSession.id, payload as any);
+
+      // Update course completedHours and progress on backend if applicable
+      const targetCourseId = feedback.selectedCourseId || feedbackSession.courseId;
+      if (targetCourseId && feedback.completed) {
+        // Find the course to calculate new values
+        const targetCourse = courses.find(c => c.id === targetCourseId);
+        if (targetCourse) {
+          const newCompletedHours = targetCourse.completedHours + feedback.completedHours;
+          const newProgress = Math.min(Math.round((newCompletedHours / targetCourse.estimatedHours) * 100), 100);
           
-          // Add new milestones if any
-          let updatedMilestones = course.milestones || [];
-          if (feedback.newMilestones && feedback.newMilestones.length > 0) {
-            const newMilestoneObjects = feedback.newMilestones.map(title => ({
-              id: `milestone-${Date.now()}-${Math.random()}`,
-              title,
-              deadline: '',
-              completed: true, // Just created milestones are marked as completed
-            }));
-            updatedMilestones = [...updatedMilestones, ...newMilestoneObjects];
-          }
+          console.log(`📈 Updating course ${targetCourseId} completedHours on backend:`, {
+            old: targetCourse.completedHours,
+            added: feedback.completedHours,
+            new: newCompletedHours,
+            progress: newProgress
+          });
           
-          // Mark completed milestones
-          if (feedback.completedMilestones && feedback.completedMilestones.length > 0) {
-            updatedMilestones = updatedMilestones.map(m => 
-              feedback.completedMilestones!.includes(m.id) ? { ...m, completed: true } : m
-            );
-          }
-          
-          return {
-            ...course,
+          // Persist to backend (backend supports completedHours and progress fields)
+          await apiUpdateCourse(targetCourseId, {
             completedHours: newCompletedHours,
-            progress: Math.min(newProgress, 100),
-            milestones: updatedMilestones,
-          };
+            progress: newProgress,
+          } as any);
         }
-        return course;
-      });
-    });
-    
-    setShowFeedbackDialog(false);
-    setFeedbackSession(null);
+      }
+
+      // Now refresh from backend to get authoritative data
+      const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(freshCourses as Course[]);
+      setScheduledSessions(freshSessions as ScheduledSession[]);
+
+      // Handle milestones (these are not automatically persisted yet, so keep optimistic UI)
+      if (targetCourseId && (feedback.newMilestones?.length || feedback.completedMilestones?.length)) {
+        setCourses(prevCourses => {
+          return prevCourses.map(course => {
+            if (course.id !== targetCourseId) return course;
+            let updatedMilestones = course.milestones || [];
+            if (feedback.newMilestones && feedback.newMilestones.length > 0) {
+              const newMilestoneObjects = feedback.newMilestones.map(title => ({
+                id: `milestone-${Date.now()}-${Math.random()}`,
+                title,
+                deadline: '',
+                completed: true,
+              }));
+              updatedMilestones = [...updatedMilestones, ...newMilestoneObjects];
+            }
+            if (feedback.completedMilestones && feedback.completedMilestones.length > 0) {
+              updatedMilestones = updatedMilestones.map(m => 
+                feedback.completedMilestones!.includes(m.id) ? { ...m, completed: true } : m
+              );
+            }
+            return { ...course, milestones: updatedMilestones };
+          });
+        });
+      }
+
+      // Close dialogs only after successful persistence and refresh
+      setShowFeedbackDialog(false);
+      setFeedbackSession(null);
+    } catch (e) {
+      console.error('Failed to update session during feedback submission', e);
+      // Keep dialog open so the user can retry; surface a simple alert for now
+      alert('Fehler beim Speichern der Session-Bewertung. Bitte versuche es erneut.');
+    }
   };
 
   // Course CRUD operations
@@ -1076,49 +1179,130 @@ function App() {
   };
 
   // Apply: user did not attend and does NOT want automatic replanning
-  const applyNotAttendedWithoutReplan = (session: ScheduledSession) => {
+  const applyNotAttendedWithoutReplan = async (session: ScheduledSession) => {
     const course = courses.find((c) => c.id === session.courseId);
     if (!course) return;
 
-    // Mark missed session completed with 0%
-    setScheduledSessions((prev) =>
-      prev.map((s) => (s.id === session.id ? { ...s, completed: true, completionPercentage: 0 } : s))
-    );
+    try {
+      // Mark missed session completed with 0% in backend
+      await apiUpdateSession(session.id, {
+        courseId: session.courseId,
+        studyBlockId: session.studyBlockId,
+        date: session.date,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        durationMinutes: session.durationMinutes,
+        completed: true,
+        completionPercentage: 0,
+        notes: session.notes,
+        endDate: session.endDate,
+      });
 
-    // Decrease scheduled hours previously allocated
-    const sessionHours = session.durationMinutes / 60;
-    setCourses((prev) =>
-      prev.map((c) => (c.id === session.courseId ? { ...c, scheduledHours: Math.max(0, c.scheduledHours - sessionHours) } : c))
-    );
+      // Decrease scheduled hours previously allocated
+      const sessionHours = session.durationMinutes / 60;
+      await apiUpdateCourseExtended(course.id, {
+        scheduledHours: Math.max(0, course.scheduledHours - sessionHours),
+      });
+
+      // Refresh data from backend
+      const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(freshCourses as Course[]);
+      setScheduledSessions(freshSessions as ScheduledSession[]);
+    } catch (error) {
+      // Handle 404 as benign (session already deleted/processed)
+      if (error instanceof Error && error.message.includes('Session not found')) {
+        console.warn('⚠️ Session already processed or deleted:', session.id);
+        // Refresh data to sync with backend state
+        try {
+          const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+          setCourses(freshCourses as Course[]);
+          setScheduledSessions(freshSessions as ScheduledSession[]);
+        } catch (refreshError) {
+          console.error('Failed to refresh after 404:', refreshError);
+        }
+      } else {
+        console.error('Failed to mark session as not attended:', error);
+      }
+    }
   };
 
   // Apply: user did not attend and WANTS automatic replanning into next unassigned session
-  const applyNotAttendedWithReplan = (session: ScheduledSession, target: ScheduledSession) => {
+  const applyNotAttendedWithReplan = async (session: ScheduledSession, target: ScheduledSession) => {
     const course = courses.find((c) => c.id === session.courseId);
     if (!course) return;
 
     const missedHours = session.durationMinutes / 60;
     const targetHours = target.durationMinutes / 60;
 
-    // 1) Remove the missed session AND assign the target session in a single state update
-    setScheduledSessions((prev) => 
-      prev
-        .filter((s) => s.id !== session.id) // Remove missed session
-        .map((s) => (s.id === target.id ? { ...s, courseId: session.courseId } : s)) // Assign target
-    );
+    try {
+      console.log('🔁 Replan start:', {
+        missedSessionId: session.id,
+        targetSessionId: target.id,
+        courseId: session.courseId,
+        missedDuration: session.durationMinutes,
+        targetDuration: target.durationMinutes,
+      });
 
-    // 2) Update course hours: decrease for missed, increase for target
-    setCourses((prev) =>
-      prev.map((c) => 
-        c.id === session.courseId 
-          ? { 
-              ...c, 
-              scheduledHours: c.scheduledHours - missedHours + targetHours,
-              status: c.status === 'planned' ? 'active' : c.status 
-            } 
-          : c
-      )
-    );
+      // 1) Delete missed session (treat 404 as success – ghost session)
+      try {
+        await apiDeleteSession(session.id);
+        console.log('✅ Deleted missed session in backend:', session.id);
+      } catch (delErr: any) {
+        const msg = delErr?.message || '';
+        if (msg.includes('Session not found')) {
+          console.warn('⚠️ Missed session already absent (404), proceeding:', session.id);
+          setScheduledSessions(prev => prev.filter(s => s.id !== session.id));
+        } else {
+          console.error('❌ Failed deleting missed session, aborting replan:', delErr);
+          return; // Abort replan if delete truly fails
+        }
+      }
+
+      // 2) Assign target session to course
+      try {
+        await apiUpdateSession(target.id, {
+          courseId: session.courseId, // Assign course
+          studyBlockId: target.studyBlockId,
+          date: target.date,
+          startTime: target.startTime,
+          endTime: target.endTime,
+          durationMinutes: target.durationMinutes,
+          notes: target.notes,
+          endDate: target.endDate,
+        });
+        console.log('✅ Target session updated & assigned:', target.id);
+      } catch (updErr) {
+        console.error('❌ Failed updating target session during replan:', updErr);
+        // Attempt local optimistic assignment so user sees change
+        setScheduledSessions(prev => prev.map(s => s.id === target.id ? { ...s, courseId: session.courseId } : s));
+      }
+
+      // 3) Refresh authoritative data (let backend recalc scheduledHours)
+      try {
+        const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+        setCourses(freshCourses as Course[]);
+        setScheduledSessions(freshSessions as ScheduledSession[]);
+        console.log('🔄 Replan backend refresh complete');
+      } catch (refreshErr) {
+        console.error('❌ Replan refresh failed – applying local fallback', refreshErr);
+        // Local fallback: remove missed session, assign target courseId, adjust scheduledHours
+        setScheduledSessions(prev => prev
+          .filter(s => s.id !== session.id)
+          .map(s => s.id === target.id ? { ...s, courseId: session.courseId } : s)
+        );
+        setCourses(prev => prev.map(c => {
+          if (c.id !== course.id) return c;
+          // If durations differ adjust scheduledHours (keep non-negative)
+          const newScheduled = Math.max(0, c.scheduledHours - missedHours + targetHours);
+          const newStatus = c.status === 'planned' ? 'active' : c.status;
+          return { ...c, scheduledHours: newScheduled, status: newStatus };
+        }));
+      }
+
+      console.log('✅ Replan complete');
+    } catch (error) {
+      console.error('Unexpected replan wrapper failure:', error);
+    }
   };
 
   const handleSessionNotAttended = () => {
@@ -1166,21 +1350,35 @@ function App() {
   const handleSaveSession = async (sessionData: Omit<ScheduledSession, 'id'>) => {
     console.log('💾 Saving Session:', {
       isEditing: !!editingSession,
+      editingSessionId: editingSession?.id,
+      editingGoogleEventId: editingSession?.googleEventId,
       sessionData: {
         date: sessionData.date,
         startTime: sessionData.startTime,
         endTime: sessionData.endTime,
         course: sessionData.courseId,
-        duration: sessionData.durationMinutes
+        duration: sessionData.durationMinutes,
+        googleEventId: (sessionData as any).googleEventId
       },
       currentTime: new Date().toString()
     });
     
+    // CourseId handling rules:
+    //  - CREATE: omit field entirely if unassigned (backend treats missing as NULL)
+    //  - UPDATE (unassign): must send explicit null to clear existing association
+    //  - UPDATE (assign/change): send the trimmed courseId string
+    const hasIncomingCourse = !!(sessionData.courseId && sessionData.courseId.trim() !== '');
+    const isUnassigning = !!(editingSession && editingSession.courseId && !hasIncomingCourse);
+    const courseIdForPayload = hasIncomingCourse
+      ? sessionData.courseId!.trim()
+      : (isUnassigning ? null : undefined); // null only when clearing during update
+
     try {
       // Update existing session or create new one
       if (editingSession) {
         await apiUpdateSession(editingSession.id, {
-          courseId: sessionData.courseId,
+          // For updates we include courseId only when assigning or clearing; otherwise omit
+          ...(courseIdForPayload !== undefined ? { courseId: courseIdForPayload as any } : {}),
           studyBlockId: sessionData.studyBlockId,
           date: sessionData.date,
           startTime: sessionData.startTime,
@@ -1193,7 +1391,8 @@ function App() {
         });
       } else {
         await apiCreateSession({
-          courseId: sessionData.courseId,
+          // For creation omit courseId when unassigned so backend validation (string) doesn't reject null
+          ...(courseIdForPayload !== undefined && courseIdForPayload !== null ? { courseId: courseIdForPayload as any } : {}),
           studyBlockId: sessionData.studyBlockId,
           date: sessionData.date,
           startTime: sessionData.startTime,
@@ -1210,23 +1409,54 @@ function App() {
       
       // Refresh data from backend to ensure consistency
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
-      setCourses(freshCourses as Course[]);
+      
+      // Recalculate scheduledHours for all courses (only count FUTURE sessions)
+      const today = new Date().toISOString().split('T')[0];
+      const scheduledHoursByCourse = new Map<string, number>();
+      
+      for (const session of freshSessions) {
+        if (!session.courseId || session.date < today) continue;
+        const hours = session.durationMinutes / 60;
+        const current = scheduledHoursByCourse.get(session.courseId) || 0;
+        scheduledHoursByCourse.set(session.courseId, current + hours);
+      }
+      
+      const coursesWithUpdatedHours = freshCourses.map(course => ({
+        ...course,
+        scheduledHours: scheduledHoursByCourse.get(course.id) || 0
+      }));
+      
+      setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
       
-      // Auto-activate course if this is first session scheduled
+      // Auto-activate course ONLY if there is a PAST session (date < today) assigned to it
+      // Course remains 'planned' until studying actually starts (past session exists)
       if (sessionData.courseId) {
-        const course = freshCourses.find(c => c.id === sessionData.courseId);
+        const course = coursesWithUpdatedHours.find(c => c.id === sessionData.courseId);
         if (course && course.status === 'planned') {
-          // Transition: planned → active
-          const token = localStorage.getItem('authToken');
-          await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${course.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            body: JSON.stringify({ status: 'active' }),
-          });
-          // Refresh courses again to get updated status
-          const again = await apiGetCourses();
-          setCourses(again as Course[]);
+          const hasPastSession = freshSessions.some(
+            s => s.courseId === course.id && s.date < today
+          );
+          
+          if (hasPastSession) {
+            // Transition: planned → active (studying has started)
+            console.log(`🚀 Activating course ${course.name} - past session detected`);
+            const token = localStorage.getItem('authToken');
+            await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${course.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+              body: JSON.stringify({ status: 'active' }),
+            });
+            // Refresh courses again to get updated status and recalculate scheduledHours
+            const againCourses = await apiGetCourses();
+            const againWithHours = againCourses.map(c => ({
+              ...c,
+              scheduledHours: scheduledHoursByCourse.get(c.id) || 0
+            }));
+            setCourses(againWithHours as Course[]);
+          } else {
+            console.log(`📅 Course ${course.name} remains planned - only future sessions scheduled`);
+          }
         }
       }
     } catch (e) {
@@ -1241,58 +1471,167 @@ function App() {
     // Trigger Google Calendar auto-sync
     setAutoSyncTrigger(Date.now());
   };
-
   const handleDeleteSession = async (sessionId: string) => {
-    console.log(`🗑️ App: Deleting session ${sessionId}`);
+    const sessionToDelete = scheduledSessions.find(s => s.id === sessionId);
+    console.log(`🗑️ App: Deleting session ${sessionId}`, {
+      googleEventId: sessionToDelete?.googleEventId,
+      date: sessionToDelete?.date,
+      startTime: sessionToDelete?.startTime,
+      courseId: sessionToDelete?.courseId,
+      hasGoogleEventId: !!sessionToDelete?.googleEventId
+    });
+    
+    // Mark as recently deleted to prevent re-import during sync grace period
+    try {
+      const recentlyDeleted: Record<string, number> = {};
+      const stored = localStorage.getItem('googleCalendarRecentlyDeleted');
+      if (stored) {
+        Object.assign(recentlyDeleted, JSON.parse(stored));
+      }
+      recentlyDeleted[sessionId] = Date.now();
+      localStorage.setItem('googleCalendarRecentlyDeleted', JSON.stringify(recentlyDeleted));
+      console.log('  📝 Marked session as recently deleted (grace period for sync)');
+      console.log('  📋 Currently tracked deleted sessions:', Object.keys(recentlyDeleted).join(', '));
+    } catch (e) {
+      console.warn('  ⚠️ Failed to mark as recently deleted:', e);
+    }
+    
     try {
       await apiDeleteSession(sessionId);
-    } catch (e) {
-      console.error('Delete session API failed (will still update local state)', e);
-    }
-
-    setScheduledSessions(prev => {
-      // Check if this is an expanded instance (has underscore in ID like "master_2025-11-11")
-      // If so, we need to delete the recurring master instead
-      let targetId = sessionId;
-      const session = prev.find(s => s.id === sessionId);
+      const [freshCourses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       
-      if (!session) {
-        // Session not found in state - might be an expanded instance
-        // Extract master ID by removing the date suffix
-        if (sessionId.includes('_')) {
-          const masterId = sessionId.split('_')[0];
-          const master = prev.find(s => s.id === masterId && s.recurrence);
-          if (master) {
-            console.log(`  ⚠️ Session ${sessionId} is an expanded instance. Deleting master ${masterId} instead.`);
-            targetId = masterId;
-          } else {
-            console.warn(`  ❌ Could not find master session ${masterId} for expanded instance ${sessionId}`);
-            return prev; // Don't delete anything if we can't find the master
-          }
-        } else {
-          console.warn(`  ❌ Session ${sessionId} not found in state`);
-          return prev;
+      // Check if any courses now have zero sessions and should be deactivated
+      const courseSessionCounts = new Map<string, number>();
+      for (const session of sessions) {
+        if (session.courseId) {
+          courseSessionCounts.set(session.courseId, (courseSessionCounts.get(session.courseId) || 0) + 1);
         }
       }
       
-      const filtered = prev.filter(s => s.id !== targetId);
-      console.log(`  Sessions after deletion: ${filtered.length} (was ${prev.length})`);
-      console.log(`  Recurring masters remaining: ${filtered.filter(s => s.recurrence).length}`);
-      console.log(`  Expanded instances remaining (should be 0): ${filtered.filter(s => s.recurringEventId && !s.recurrence).length}`);
-      return filtered;
-    });
-    
+      // Deactivate courses with no sessions
+      for (const course of freshCourses) {
+        if (course.status === 'active' && !courseSessionCounts.has(course.id)) {
+          try {
+            await apiUpdateCourse(course.id, { status: 'planned' } as any);
+            console.log(`  📦 Deactivated course ${course.name} - no sessions remaining`);
+          } catch (error) {
+            console.error(`  ❌ Failed to deactivate course ${course.id}:`, error);
+          }
+        }
+      }
+      
+      // Refresh again to get updated statuses
+      const [finalCourses, finalSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(finalCourses as Course[]);
+      setScheduledSessions(finalSessions as ScheduledSession[]);
+      console.log('  ✅ Courses and sessions refreshed from backend');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg.includes('Session not found')) {
+        console.warn('  ⚠️ Backend reports session already missing (404). Removing locally:', sessionId);
+        setScheduledSessions(prev => prev.filter(s => s.id !== sessionId));
+        try {
+          const [freshCourses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+          
+          // Check if any courses now have zero sessions and should be deactivated
+          const courseSessionCounts = new Map<string, number>();
+          for (const session of sessions) {
+            if (session.courseId) {
+              courseSessionCounts.set(session.courseId, (courseSessionCounts.get(session.courseId) || 0) + 1);
+            }
+          }
+          
+          // Deactivate courses with no sessions
+          for (const course of freshCourses) {
+            if (course.status === 'active' && !courseSessionCounts.has(course.id)) {
+              try {
+                await apiUpdateCourse(course.id, { status: 'planned' } as any);
+                console.log(`  📦 Deactivated course ${course.name} - no sessions remaining`);
+              } catch (error) {
+                console.error(`  ❌ Failed to deactivate course ${course.id}:`, error);
+              }
+            }
+          }
+          
+          const [finalCourses, finalSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+          setCourses(finalCourses as Course[]);
+          setScheduledSessions(finalSessions as ScheduledSession[]);
+          console.log('  🔄 Post-404 refresh complete');
+        } catch (refreshErr) {
+          console.error('  ❌ Post-404 refresh failed', refreshErr);
+        }
+      } else {
+        console.error('Delete session failed', e);
+      }
+    }
     // Clear state and close dialog
     setOriginalSessionBeforeMove(null);
     setEditingSession(undefined);
     setShowSessionDialog(false);
-    
     // Trigger auto-sync
     setAutoSyncTrigger(Date.now());
   };
 
+  // Bulk delete all sessions (user wants to reset calendar)
+  const handleDeleteAllSessions = async () => {
+    console.log('🗑️ App: Bulk deleting ALL sessions');
+    try {
+      const existing = await apiGetSessions();
+      for (const s of existing) {
+        console.log('   → Deleting', s.id, s.courseId || '(unassigned)');
+        try {
+          await apiDeleteSession(s.id);
+        } catch (e: any) {
+          const msg = e?.message || '';
+          if (msg.includes('Session not found')) {
+            console.warn('     ⚠️ Already gone (404), ensuring local removal for:', s.id);
+            setScheduledSessions(prev => prev.filter(sess => sess.id !== s.id));
+          } else {
+            console.error('     ❌ Delete failed:', s.id, e);
+          }
+        }
+      }
+      const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      setCourses(freshCourses as Course[]);
+      setScheduledSessions(freshSessions as ScheduledSession[]);
+      console.log(`  ✅ Bulk delete complete (${existing.length} attempted)`);
+    } catch (e) {
+      console.error('Bulk delete sessions failed', e);
+    }
+    setEditingSession(undefined);
+    setOriginalSessionBeforeMove(null);
+    setShowSessionDialog(false);
+    setAutoSyncTrigger(Date.now());
+  };
+
   // Handle sessions imported from Google Calendar
+  const lastImportRef = useRef<{ time: number; sessionIds: Set<string> }>({ 
+    time: 0, 
+    sessionIds: new Set() 
+  });
+
   const handleSessionsImported = (importedSessions: ScheduledSession[], syncStartTime?: number) => {
+    const now = Date.now();
+    
+    // CRITICAL: Prevent duplicate imports within short time window (React StrictMode protection)
+    // If the same sessions were imported within the last 2 seconds, skip to avoid duplicates
+    const timeSinceLastImport = now - lastImportRef.current.time;
+    const importedIds = new Set(importedSessions.map(s => s.id));
+    
+    if (timeSinceLastImport < 2000) {
+      // Check if it's the same set of sessions (ignore order)
+      const isSameImport = importedIds.size === lastImportRef.current.sessionIds.size &&
+        Array.from(importedIds).every(id => lastImportRef.current.sessionIds.has(id));
+      
+      if (isSameImport) {
+        console.log('⏸️ Duplicate import detected (same sessions within 2s), skipping to prevent duplicates');
+        return;
+      }
+    }
+    
+    // Update last import tracking
+    lastImportRef.current = { time: now, sessionIds: importedIds };
+    
     console.log('📥 App: Importing sessions from Google Calendar:', importedSessions.length);
     
     // Track if any changes were made during sync (need to re-sync)
@@ -1304,25 +1643,48 @@ function App() {
   setScheduledSessions(currentSessions => {
       console.log('🔁 App: Merging synced sessions with current app state');
       console.log('  Current sessions in app:', currentSessions.length);
+      console.log('  Current session IDs:', currentSessions.map(s => `${s.id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`).join(' | '));
       console.log('  Current recurring masters:', currentSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
       console.log('  Current expanded instances:', currentSessions.filter(s => s.recurringEventId && !s.recurrence).map(s => ({ id: s.id, masterId: s.recurringEventId })));
       console.log('  Synced sessions from Google:', importedSessions.length);
+      console.log('  Synced session IDs:', importedSessions.map(s => `${s.id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`).join(' | '));
       console.log('  Synced recurring masters:', importedSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
       
       // Build maps for efficient lookup
       const syncedById = new Map(importedSessions.map(s => [s.id, s]));
       const currentById = new Map(currentSessions.map(s => [s.id, s]));
       
+      console.log('🔍 MERGE ANALYSIS:');
+      const onlyInApp = Array.from(currentById.keys()).filter(id => !syncedById.has(id));
+      const onlyInGoogle = Array.from(syncedById.keys()).filter(id => !currentById.has(id));
+      const inBoth = Array.from(currentById.keys()).filter(id => syncedById.has(id));
+      
+      console.log('  - Sessions ONLY in app (not synced):', onlyInApp.map(id => {
+        const s = currentById.get(id)!;
+        return `${id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`;
+      }));
+      console.log('  - Sessions ONLY in Google (not in app):', onlyInGoogle.map(id => {
+        const s = syncedById.get(id)!;
+        return `${id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`;
+      }));
+      console.log('  - Sessions in BOTH:', inBoth.map(id => {
+        const curr = currentById.get(id)!;
+        const sync = syncedById.get(id)!;
+        return `${id} (curr.googleEventId:${curr.googleEventId || 'none'}, sync.googleEventId:${sync.googleEventId || 'none'})`;
+      }));
+      
       // CRITICAL: Merge local and synced sessions with conflict resolution
-      // Strategy: For each session ID, choose the version with the newer lastModified timestamp
+      // Strategy: Synced sessions are authoritative - they represent the merged state
+      // Only preserve local sessions that were created/modified DURING the sync
       const sessionById = new Map<string, ScheduledSession>();
       
-      // First, add all synced sessions (authoritative from server)
+      // First, add all synced sessions (authoritative - this is the merged state from server)
       for (const syncedSession of importedSessions) {
         sessionById.set(syncedSession.id, syncedSession);
       }
       
-      // Then, check current sessions for conflicts or new additions
+      // Then, check current sessions for any that were created/modified DURING the sync
+      // These need to be preserved and will trigger a re-sync
       for (const [id, currentSession] of currentById) {
         const syncedSession = syncedById.get(id);
         
@@ -1333,51 +1695,94 @@ function App() {
         }
         
         if (syncedSession) {
-          // Session exists in both - resolve conflict by timestamp
+          // Session exists in both - check if local was modified during sync
           const currentMod = currentSession.lastModified || 0;
           const syncedMod = syncedSession.lastModified || 0;
           
           if (syncStartTime && currentMod > syncStartTime) {
             // Local session was modified DURING the sync - prefer local (user's latest change)
-            console.log(`🔄 Conflict: Session ${id} modified during sync - preserving local changes (local: ${new Date(currentMod).toISOString()}, synced: ${new Date(syncedMod).toISOString()})`);
+            console.log(`🔄 Conflict: Session ${id} modified during sync - preserving local changes`, {
+              local: { mod: new Date(currentMod).toISOString(), googleEventId: currentSession.googleEventId },
+              synced: { mod: new Date(syncedMod).toISOString(), googleEventId: syncedSession.googleEventId }
+            });
             sessionById.set(id, currentSession);
             hasChangesDuringSync = true; // Mark for re-sync
-          } else if (syncedMod > currentMod) {
-            // Synced version is newer - already in map, do nothing
-            console.log(`✅ Using synced version of ${id} (newer: synced ${new Date(syncedMod).toISOString()} > local ${new Date(currentMod).toISOString()})`);
           } else {
-            // Local version is newer but wasn't modified during sync - prefer local
-            console.log(`✅ Using local version of ${id} (newer: local ${new Date(currentMod).toISOString()} > synced ${new Date(syncedMod).toISOString()})`);
-            sessionById.set(id, currentSession);
+            // Use synced version BUT preserve local-only fields that don't sync to Google Calendar
+            // CRITICAL: Google Calendar doesn't store: completed, completionPercentage
+            // These are app-only fields for attendance tracking
+            const merged = {
+              ...syncedSession,
+              // Preserve attendance tracking (not in Google Calendar)
+              completed: currentSession.completed,
+              completionPercentage: currentSession.completionPercentage,
+            };
+            console.log(`✅ Using synced version of ${id} (preserving local attendance data)`, {
+              synced: { mod: new Date(syncedMod).toISOString(), googleEventId: syncedSession.googleEventId, courseId: syncedSession.courseId },
+              local: { mod: new Date(currentMod).toISOString(), googleEventId: currentSession.googleEventId, completed: currentSession.completed, courseId: currentSession.courseId },
+              merged: { completed: merged.completed, completionPercentage: merged.completionPercentage, courseId: merged.courseId }
+            });
+            sessionById.set(id, merged);
           }
         } else {
           // Session only in current state (not in sync result)
           const currentMod = currentSession.lastModified || 0;
           if (syncStartTime && currentMod > syncStartTime) {
-            // Created during sync - add it
-            console.log(`➕ Preserving local session ${id} created during sync`);
+            // Created during sync - add it and trigger re-sync
+            console.log(`➕ Preserving local session ${id} created during sync`, {
+              mod: new Date(currentMod).toISOString(),
+              googleEventId: currentSession.googleEventId,
+              date: currentSession.date,
+              courseId: currentSession.courseId
+            });
             sessionById.set(id, currentSession);
             hasChangesDuringSync = true; // Mark for re-sync
+          } else if (currentSession.googleEventId) {
+            // Has googleEventId but not in sync result - was deleted from Google Calendar
+            // Do NOT add to sessionById - this removes it from app state
+            console.log(`🗑️ Removing local session ${id} - was synced to Google (has googleEventId) but deleted from calendar`, {
+              googleEventId: currentSession.googleEventId,
+              date: currentSession.date,
+              startTime: currentSession.startTime,
+              courseId: currentSession.courseId
+            });
           } else {
-            // Old session not in sync result - was deleted
-            console.log(`⏭️ Skipping local session ${id} - not in sync result (likely deleted)`);
+            // Local-only session (no googleEventId) - keep it for future sync
+            console.log(`📍 Preserving local-only session ${id} (never synced to Google)`, {
+              date: currentSession.date,
+              startTime: currentSession.startTime,
+              courseId: currentSession.courseId
+            });
+            sessionById.set(id, currentSession);
           }
         }
       }
       
       const finalSessions = Array.from(sessionById.values());
       
-      console.log('  Final merged sessions:', finalSessions.length);
-      console.log('  Final recurring masters:', finalSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
-      console.log('  Final expanded instances (should be 0):', finalSessions.filter(s => s.recurringEventId && !s.recurrence).length);
+      console.log('┌─────────────────────────────────────────────────────────┐');
+      console.log('│ FINAL APP STATE AFTER MERGE                             │');
+      console.log('├─────────────────────────────────────────────────────────┤');
+      console.log('│ Total sessions:', finalSessions.length);
+      console.log('│ Recurring masters:', finalSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
+      console.log('│ Expanded instances (should be 0):', finalSessions.filter(s => s.recurringEventId && !s.recurrence).length);
+      console.log('│ Sessions WITH googleEventId:', finalSessions.filter(s => s.googleEventId).map(s => `${s.id}:${s.googleEventId?.substring(0, 8)}...`).join(', '));
+      console.log('│ Sessions WITHOUT googleEventId:', finalSessions.filter(s => !s.googleEventId).map(s => `${s.id} (date:${s.date})`).join(', '));
+      console.log('└─────────────────────────────────────────────────────────┘');
       
       // Recalculate scheduledHours for all courses based on merged sessions
+      // scheduledHours = only FUTURE sessions (date >= today) assigned to course
       console.log('🔄 Recalculating scheduled hours for all courses...');
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
       const scheduledHoursByCourse = new Map<string, number>();
       
       for (const session of finalSessions) {
         // Skip unassigned sessions (blockers) - they don't count toward course hours
         if (!session.courseId) continue;
+        
+        // Only count FUTURE sessions (date >= today) for scheduledHours
+        // Past sessions should only affect completedHours (if attended)
+        if (session.date < today) continue;
         
         const hours = session.durationMinutes / 60;
         const current = scheduledHoursByCourse.get(session.courseId) || 0;
@@ -1399,6 +1804,105 @@ function App() {
         // Increment autoSyncTrigger to trigger the GoogleCalendarSyncService
         setAutoSyncTrigger(prev => prev + 1);
       }
+  };
+
+  /**
+   * Handle sessions deleted from Google Calendar
+   * Delete them from the backend database to prevent re-syncing
+   */
+  const handleSessionsDeleted = async (sessionIds: string[]) => {
+    console.log('🗑️ App: Deleting sessions from backend database:', sessionIds);
+    
+    // First, get the sessions to determine which courses are affected
+    const deletedSessions = scheduledSessions.filter(s => sessionIds.includes(s.id));
+    const affectedCourseIds = new Set(deletedSessions.map(s => s.courseId).filter(Boolean));
+    
+    console.log('📊 Affected courses:', Array.from(affectedCourseIds));
+    
+    for (const sessionId of sessionIds) {
+      try {
+        await apiDeleteSession(sessionId);
+        console.log(`✅ Deleted session ${sessionId} from backend`);
+      } catch (error) {
+        // Check if error is "Session not found" - this is expected if session was already deleted
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('Session not found') || errorMessage.includes('not found')) {
+          console.log(`ℹ️ Session ${sessionId} already deleted from backend (expected)`);
+        } else {
+          console.error(`❌ Failed to delete session ${sessionId} from backend:`, error);
+        }
+      }
+    }
+    
+    // Remove from React state and recalculate scheduled hours for affected courses
+    const remainingSessions = scheduledSessions.filter(s => !sessionIds.includes(s.id));
+    
+    // Recalculate scheduledHours for all courses based on remaining sessions
+    // scheduledHours = only FUTURE sessions (date >= today) assigned to course
+    console.log('🔄 Recalculating scheduled hours after deletion...');
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+    const scheduledHoursByCourse = new Map<string, number>();
+    
+    for (const session of remainingSessions) {
+      // Skip unassigned sessions (blockers) - they don't count toward course hours
+      if (!session.courseId) continue;
+      
+      // Only count FUTURE sessions (date >= today) for scheduledHours
+      if (session.date < today) continue;
+      
+      const hours = session.durationMinutes / 60;
+      const current = scheduledHoursByCourse.get(session.courseId) || 0;
+      scheduledHoursByCourse.set(session.courseId, current + hours);
+    }
+    
+    // Check which courses have no sessions left and should be deactivated
+    const courseSessionCounts = new Map<string, number>();
+    for (const session of remainingSessions) {
+      if (session.courseId) {
+        courseSessionCounts.set(session.courseId, (courseSessionCounts.get(session.courseId) || 0) + 1);
+      }
+    }
+    
+    // Identify courses to deactivate (active but no sessions)
+    const coursesToDeactivate: string[] = [];
+    
+    // Update courses with recalculated scheduled hours and deactivate if no sessions
+    setCourses(prevCourses => prevCourses.map(course => {
+      const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
+      const hasAnySessions = courseSessionCounts.has(course.id);
+      
+      // Deactivate course if it's active but has no sessions left
+      let newStatus = course.status;
+      if (course.status === 'active' && !hasAnySessions) {
+        newStatus = 'planned';
+        coursesToDeactivate.push(course.id);
+        console.log(`📦 Deactivating course ${course.name} - no sessions remaining`);
+      }
+      
+      if (affectedCourseIds.has(course.id)) {
+        console.log(`📉 Course ${course.name}: ${course.scheduledHours}h → ${newScheduledHours}h`);
+      }
+      
+      return {
+        ...course,
+        scheduledHours: newScheduledHours,
+        status: newStatus
+      };
+    }));
+    
+    // Update sessions state
+    setScheduledSessions(remainingSessions);
+    
+    // Persist status changes to backend for deactivated courses
+    for (const courseId of coursesToDeactivate) {
+      try {
+        await apiUpdateCourse(courseId, { status: 'planned' } as any);
+        const course = courses.find(c => c.id === courseId);
+        console.log(`✅ Deactivated course ${course?.name || courseId} on backend`);
+      } catch (error) {
+        console.error(`❌ Failed to deactivate course ${courseId}:`, error);
+      }
+    }
   };
 
   // Drag to create session from calendar
@@ -1622,9 +2126,12 @@ function App() {
         onOpenChange={(open) => {
           if (!open) {
             // If the dialog is being closed without an explicit choice, apply default: mark as not attended
-            if (missedSession && !replanHandled) {
-              applyNotAttendedWithoutReplan(missedSession);
-            }
+            // Use setTimeout to allow state updates from button clicks to process first
+            setTimeout(() => {
+              if (!replanHandled && missedSession) {
+                applyNotAttendedWithoutReplan(missedSession);
+              }
+            }, 0);
             setShowReplanDialog(false);
             setMissedSession(null);
             setReplanCandidate(null);
@@ -1763,6 +2270,7 @@ function App() {
             onEditCourse={handleEditCourse}
             onSessionMove={handleSessionMove}
             onSessionsImported={handleSessionsImported}
+            onSessionsDeleted={handleSessionsDeleted}
             autoSyncTrigger={autoSyncTrigger}
             previewSession={previewSession}
             editingSessionId={editingSession?.id}
@@ -1788,6 +2296,7 @@ function App() {
             courses={courses}
             onAddSession={handleAddSession}
             onEditSession={handleEditSession}
+            onDeleteAllSessions={handleDeleteAllSessions}
             onDeleteSession={handleDeleteSession}
             onViewChange={setCurrentView}
           />

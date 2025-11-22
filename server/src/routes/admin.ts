@@ -48,4 +48,124 @@ router.post('/claim-data', (req: AuthRequest, res) => {
   }
 });
 
+// POST /api/admin/recalculate-all-courses
+// Recalculate scheduledHours for all courses (excludes completed sessions)
+router.post('/recalculate-all-courses', (req: AuthRequest, res) => {
+  try {
+    if (!isAdmin(req)) {
+      res.status(403).json({ error: 'Forbidden: admin only' });
+      return;
+    }
+    
+    const userId = req.user!.userId;
+    
+    // Get all courses for this user
+    const courses = dbWrapper.prepare(`
+      SELECT id, name FROM courses WHERE user_id = ?
+    `).all(userId) as Array<{ id: string; name: string }>;
+    
+    const results = [];
+    for (const course of courses) {
+      try {
+        // Sum up all INCOMPLETE session durations for this course
+        const result = dbWrapper.prepare(`
+          SELECT SUM(duration_minutes) as total_minutes
+          FROM scheduled_sessions
+          WHERE course_id = ? AND user_id = ? AND completed = 0
+        `).get(course.id, userId) as { total_minutes: number | null };
+        
+        const totalHours = result.total_minutes ? result.total_minutes / 60 : 0;
+        
+        // Update the course's scheduled_hours
+        dbWrapper.prepare(`
+          UPDATE courses
+          SET scheduled_hours = ?
+          WHERE id = ? AND user_id = ?
+        `).run(totalHours, course.id, userId);
+        
+        results.push({
+          courseId: course.id,
+          courseName: course.name,
+          success: true,
+          hours: totalHours
+        });
+        
+        console.log(`✅ Recalculated ${course.name}: ${totalHours} hours`);
+      } catch (error) {
+        results.push({
+          courseId: course.id,
+          courseName: course.name,
+          success: false,
+          error: String(error)
+        });
+        console.error(`❌ Failed to recalculate ${course.name}:`, error);
+      }
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    const errorCount = results.filter(r => !r.success).length;
+    
+    res.json({
+      message: 'Recalculation complete',
+      total: courses.length,
+      successful: successCount,
+      errors: errorCount,
+      details: results
+    });
+  } catch (error) {
+    console.error('Recalculation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/admin/cleanup-users
+// Delete all users and their data EXCEPT the specified protected email
+router.post('/cleanup-users', (req: AuthRequest, res) => {
+  try {
+    if (!isAdmin(req)) {
+      res.status(403).json({ error: 'Forbidden: admin only' });
+      return;
+    }
+    
+    const protectedEmail = 'atzlerdo@gmail.com';
+    
+    // Get the protected user's ID
+    const protectedUser = dbWrapper.prepare(`
+      SELECT id FROM users WHERE LOWER(email) = LOWER(?)
+    `).get(protectedEmail) as { id: string } | undefined;
+    
+    if (!protectedUser) {
+      res.status(400).json({ 
+        error: 'Protected user not found',
+        protectedEmail 
+      });
+      return;
+    }
+    
+    // Count users to be deleted
+    const usersToDelete = dbWrapper.prepare(`
+      SELECT COUNT(*) as count FROM users WHERE id != ?
+    `).get(protectedUser.id) as { count: number };
+    
+    // Delete all data for other users (CASCADE will handle related records)
+    // The foreign key constraints with ON DELETE CASCADE will automatically delete:
+    // - courses, scheduled_sessions, study_blocks, study_programs, google_calendar_tokens, etc.
+    const deleteResult = dbWrapper.prepare(`
+      DELETE FROM users WHERE id != ?
+    `).run(protectedUser.id);
+    
+    console.log(`🧹 Cleaned up ${deleteResult.changes} users (protected: ${protectedEmail})`);
+    
+    res.json({
+      message: 'Cleanup complete',
+      deletedUsers: deleteResult.changes,
+      protectedEmail,
+      protectedUserId: protectedUser.id
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 export default router;

@@ -58,8 +58,9 @@ interface SessionDialogProps {
 }
 
 export function SessionDialog({ open, onClose, onSave, onDelete, session, courses, sessions = [], onCreateCourse, initialDate, initialStartTime, initialEndTime, onPreviewChange }: SessionDialogProps) {
-  // Debug logging
-  console.log('SessionDialog render:', { session: session?.id, hasOnDelete: !!onDelete, sessionCourseId: session?.courseId });
+  // Debug logging removed - too verbose during normal operation
+  // Uncomment if debugging dialog state issues:
+  // console.log('SessionDialog render:', { session: session?.id, hasOnDelete: !!onDelete, sessionCourseId: session?.courseId });
   
   const [courseId, setCourseId] = useState('');
   const [date, setDate] = useState(''); // ISO format for internal use
@@ -76,6 +77,10 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   const [endClockMode, setEndClockMode] = useState<'hours' | 'minutes'>('hours');
   const [startClockOpen, setStartClockOpen] = useState(false);
   const [endClockOpen, setEndClockOpen] = useState(false);
+  
+  // Date picker state
+  const [startDateOpen, setStartDateOpen] = useState(false);
+  const [endDateOpen, setEndDateOpen] = useState(false);
   
   // Initialize period based on current time
   const getInitialPeriod = (timeStr: string): 'AM' | 'PM' => {
@@ -515,6 +520,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
 
   const handleDelete = () => {
     if (session && onDelete) {
+      console.log('🗑️ SessionDialog: Delete requested', { id: session.id, courseId: session.courseId, date: session.date, startTime: session.startTime, endTime: session.endTime });
       onDelete(session.id);
       // Don't call onClose() here - let the parent component handle closing
     }
@@ -539,7 +545,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                   <Info className="w-4 h-4 text-gray-500" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-80">
+              <PopoverContent className="w-80 z-[300]">
                 <p className="text-sm text-gray-600">
                   Plane eine Lernsession für einen deiner Kurse.
                 </p>
@@ -558,7 +564,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
               <SelectTrigger id="course" className="w-full">
                 <SelectValue placeholder="Kurs wählen" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="z-[200]">
                 <SelectItem value="unassigned">Nicht zugewiesen</SelectItem>
                 {availableCourses.map(course => {
                   const hasSession = coursesWithSessions.has(course.id);
@@ -611,13 +617,13 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                   placeholder="TT.MM.JJJJ"
                   className="flex-1 min-w-0"
                 />
-                <Popover>
+                <Popover open={startDateOpen} onOpenChange={setStartDateOpen}>
                   <PopoverTrigger asChild>
                     <Button variant="outline" size="icon" className="shrink-0 w-9 h-9">
                       <CalendarIcon className="w-4 h-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0 bg-white" align="end">
+                  <PopoverContent className="w-auto p-0 bg-white z-[300]" align="end">
                     <Calendar
                       mode="single"
                       selected={date ? new Date(date) : undefined}
@@ -631,6 +637,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                             setEndDate(newDate);
                             setEndDateDisplay(formatDateDE(newDate));
                           }
+                          setStartDateOpen(false); // Close the popover
                         }
                       }}
                       locale={de}
@@ -659,13 +666,13 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                   placeholder="TT.MM.JJJJ"
                   className="flex-1 min-w-0"
                 />
-                <Popover>
+                <Popover open={endDateOpen} onOpenChange={setEndDateOpen}>
                   <PopoverTrigger asChild>
                     <Button variant="outline" size="icon" className="shrink-0 w-9 h-9">
                       <CalendarIcon className="w-4 h-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0 bg-white" align="end">
+                  <PopoverContent className="w-auto p-0 bg-white z-[300]" align="end">
                     <Calendar
                       mode="single"
                       selected={endDate ? new Date(endDate) : undefined}
@@ -674,6 +681,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                           const newEndDate = format(selectedDate, 'yyyy-MM-dd');
                           setEndDate(newEndDate);
                           setEndDateDisplay(formatDateDE(newEndDate));
+                          setEndDateOpen(false); // Close the popover
                         }
                       }}
                       disabled={(calendarDate) => {
@@ -769,7 +777,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                       <Clock className="w-4 h-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto p-4 bg-white" align="end">
+                  <PopoverContent className="w-auto p-4 bg-white z-[300]" align="end">
                     <div className="flex flex-col items-center gap-3">
                       {startClockMode === 'hours' ? (
                         renderWatchClock('hours', startTime, startClockPeriod, (newTime) => {
@@ -865,7 +873,7 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                       <Clock className="w-4 h-4" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto p-4 bg-white" align="end">
+                  <PopoverContent className="w-auto p-4 bg-white z-[300]" align="end">
                     <div className="flex flex-col items-center gap-3">
                       {endClockMode === 'hours' ? (
                         renderWatchClock('hours', endTime, endClockPeriod, (newTime) => {

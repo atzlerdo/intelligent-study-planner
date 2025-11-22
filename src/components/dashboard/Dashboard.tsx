@@ -18,15 +18,26 @@ interface DashboardProps {
   onEditCourse?: (course: Course) => void;
   onSessionMove?: (session: ScheduledSession, newDate: string, newStartTime: string, newEndTime: string) => void;
   onSessionsImported?: (sessions: ScheduledSession[]) => void;
+  onSessionsDeleted?: (sessionIds: string[]) => void;
   autoSyncTrigger?: number;
   previewSession?: ScheduledSession | null;
   editingSessionId?: string | null;
   isDialogOpen?: boolean;
 }
 
-export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, autoSyncTrigger, /* previewSession unused with FullCalendar */ /* editingSessionId unused */ isDialogOpen }: DashboardProps) {
-  // Filter for active courses only
-  const activeCourses = courses.filter(c => c.status === 'active');
+export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, onSessionsDeleted, autoSyncTrigger, /* previewSession unused with FullCalendar */ /* editingSessionId unused */ isDialogOpen }: DashboardProps) {
+  // Filter for active courses that have at least one session assigned
+  // A course should only appear on the dashboard if it has sessions
+  const courseSessionCounts = new Map<string, number>();
+  scheduledSessions.forEach(session => {
+    if (session.courseId) {
+      courseSessionCounts.set(session.courseId, (courseSessionCounts.get(session.courseId) || 0) + 1);
+    }
+  });
+  
+  const activeCourses = courses.filter(c => 
+    c.status === 'active' && courseSessionCounts.has(c.id)
+  );
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
   
   // Get all sessions for active courses + unassigned sessions (blockers)
@@ -42,10 +53,28 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
   
   // Add unassigned session hours to the total
   const unassignedHours = scheduledSessions
-    .filter(s => !s.courseId)
+    .filter(s => !s.courseId && !s.completed)
     .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
   
   const scheduledHours = coursesScheduledHours + unassignedHours;
+  
+  // Calculate total completed hours from all courses (not just finished courses)
+  const completedHoursFromCourses = courses
+    .reduce((sum, c) => sum + c.completedHours, 0);
+  
+  // Add the initial completed ECTS from onboarding (already achieved before using the app)
+  // This ensures pre-existing achievements are shown in the progress bar
+  const completedCoursesECTS = courses
+    .filter(c => c.status === 'completed')
+    .reduce((sum, c) => sum + c.ects, 0);
+  
+  // studyProgram.completedECTS includes both initial onboarding value AND completed courses
+  // To avoid double-counting completed courses, we calculate: initial = total - courses
+  const initialCompletedECTS = studyProgram.completedECTS - completedCoursesECTS;
+  const initialCompletedHours = Math.max(0, initialCompletedECTS * studyProgram.hoursPerECTS);
+  
+  // Total completed hours = initial achievements + session-level completions
+  const totalCompletedHours = initialCompletedHours + completedHoursFromCourses;
 
   return (
     <div className="h-full overflow-hidden lg:overflow-hidden overflow-y-auto p-4">
@@ -72,7 +101,8 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                     <div className="h-6 bg-white/20 rounded-full overflow-hidden flex">
                       {/* Completed portion - Green */}
                       {(() => {
-                        const actualWidth = (studyProgram.completedECTS / studyProgram.totalECTS) * 100;
+                        const totalHours = studyProgram.totalECTS * studyProgram.hoursPerECTS;
+                        const actualWidth = (totalCompletedHours / totalHours) * 100;
                         const minWidth = actualWidth > 0 ? 12 : 0;
                         const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
                         return (
@@ -81,7 +111,7 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                             style={{ width: `${displayWidth}%` }}
                           >
                             <span className="text-xs px-2 truncate">
-                              {Math.round(studyProgram.completedECTS * studyProgram.hoursPerECTS)}h
+                              {Math.round(totalCompletedHours)}h
                             </span>
                           </div>
                         );
@@ -111,8 +141,9 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
                       
                       {/* Remaining portion - Gray */}
                       {(() => {
-                        const remaining = (studyProgram.totalECTS - studyProgram.completedECTS) * studyProgram.hoursPerECTS - scheduledHours;
-                        const actualWidth = Math.max(0, (remaining / (studyProgram.totalECTS * studyProgram.hoursPerECTS)) * 100);
+                        const totalHours = studyProgram.totalECTS * studyProgram.hoursPerECTS;
+                        const remaining = totalHours - totalCompletedHours - scheduledHours;
+                        const actualWidth = Math.max(0, (remaining / totalHours) * 100);
                         const minWidth = actualWidth > 0 ? 12 : 0;
                         const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
                         return (
@@ -342,6 +373,7 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
               onCreateSession={onCreateSession}
               onSessionMove={onSessionMove}
               onSessionsImported={onSessionsImported}
+              onSessionsDeleted={onSessionsDeleted}
               autoSyncTrigger={autoSyncTrigger}
               previewSession={undefined}
               editingSessionId={undefined}

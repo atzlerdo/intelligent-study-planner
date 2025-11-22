@@ -56,9 +56,9 @@ export function OnboardingDialog({ open, onComplete }: OnboardingDialogProps) {
             <Label htmlFor="totalECTS">Gesamt-ECTS deines Studiums</Label>
             <Select value={totalECTS} onValueChange={(val) => setTotalECTS(val as '180' | '210')}>
               <SelectTrigger id="totalECTS">
-                <SelectValue />
+                <SelectValue placeholder="ECTS wählen" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="z-[200]">
                 <SelectItem value="180">180 (Bachelor)</SelectItem>
                 <SelectItem value="210">210</SelectItem>
               </SelectContent>

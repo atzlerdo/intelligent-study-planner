@@ -1,5 +1,58 @@
 # Changelog
 
+## [v0.6.0] - 2024-11-22
+
+### Fixed - Progress Calculation & Course Lifecycle
+- **Course progress bar accuracy**: `scheduledHours` now only counts FUTURE incomplete sessions (was incorrectly including all past sessions)
+- **Course activation logic**: Courses only activate from "planned" to "active" status when they have at least ONE PAST attended session (prevents premature activation from future-only sessions)
+- **Course auto-deactivation**: Courses automatically return to "planned" status when all their sessions are deleted
+- **Dashboard visibility**: Active courses without any sessions no longer appear on dashboard
+- **Data integrity check**: On page load, app now recalculates `completedHours` from actual attended sessions in database and corrects any mismatches (fixes legacy data inconsistencies)
+
+### Fixed - Google Calendar Sync
+- **Session resurrection bug**: Sessions deleted from app no longer reappear after sync (added `googleEventId` check to distinguish synced vs local-only sessions)
+- **Duplicate event creation**: Fixed race condition in promise cache that caused events to be synced twice to Google Calendar (switched from IIFE to deferred promise pattern)
+- **Duplicate calendar creation**: Fixed React StrictMode double-mount causing multiple "Intelligent Study Planner" calendars (added singleton pattern with promise cache)
+- **Session deletion sync**: Sessions deleted from Google Calendar now correctly update progress bar (added scheduledHours recalculation after deletion)
+- **Cache corruption handling**: Filter out invalid IDs (googleEventIds) from session tracking cache to prevent false deletion detection
+- **Calendar cache clearing**: Disconnect button now clears cached calendar ID from localStorage (prevents reuse of deleted calendars on reconnect)
+
+### Added
+- **Calendar selection dialog**: When multiple calendars with same name exist, user can choose which to use or create new one
+- **Grace period tracking**: 5-minute grace period prevents re-importing recently deleted sessions during API propagation delays
+- **Detailed logging system**: Comprehensive console logging for debugging sync operations, merge logic, and session lifecycle (can be removed for production)
+
+### Changed
+- **Course lifecycle states**: More accurate transitions between "planned" → "active" → "completed" based on actual session attendance
+- **Merge logic**: Improved session merge to properly handle sessions that exist locally but not in sync result
+- **Promise caching**: Both calendar creation and session sync now use module-level promise cache to prevent concurrent duplicates
+
+### Technical Improvements
+- **Deferred promise pattern**: Replaced IIFE with deferred promises to eliminate race conditions in cache  
+- **Singleton patterns**: Added module-level caches for `getOrCreateStudyCalendar()` and `syncSessionsToGoogleCalendar()`
+- **Cache validation**: Added filters to ensure cache only contains valid session IDs (format: `session-*`)
+- **Error handling**: Improved 404 handling for missing sessions and deleted calendars
+
+### Documentation
+- Added comprehensive inline comments explaining WHY code exists (not just WHAT it does)
+- All critical functions now have JSDoc-style documentation
+- New documentation files:
+  - `CALENDAR_DUPLICATE_FIX_20251122.md` - Calendar duplication fix
+  - `CALENDAR_CACHE_CLEARING_FIX_20251122.md` - Cache clearing on disconnect  
+  - `SESSION_DUPLICATE_SYNC_FIX_20251122.md` - Session sync duplication fix
+  - `PROMISE_CACHE_RACE_CONDITION_FIX_20251122.md` - Race condition fix
+  - `SYNC_DELETION_FIX_20251122.md` - Deletion sync improvements
+  - `SYNC_RESURRECTION_BUG_FIX.md` - Session resurrection fix
+  - `DATA_INTEGRITY_FIX_20251122.md` - Data integrity check
+
+### Breaking Changes
+None - all changes are backwards compatible
+
+### Known Limitations
+- localStorage cache keys not yet user-specific (TODO: include userId in cache keys)
+- No refresh token handling (tokens expire after ~1 hour)
+- Verbose logging should be removed/reduced for production deployment
+
 ## [v0.5.0] - 2025-11-12
 
 ### Security & Architecture

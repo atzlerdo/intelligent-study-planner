@@ -70,7 +70,24 @@ interface CalendarEvent {
 
 // Dedicated calendar name for app events
 const STUDY_CALENDAR_NAME = 'Intelligent Study Planner';
-let studyCalendarId: string | null = null;
+const CALENDAR_ID_STORAGE_KEY = 'googleCalendarStudyCalendarId';
+
+// Cache calendar ID in localStorage to prevent creating duplicates
+function getStudyCalendarId(): string | null {
+  try {
+    return localStorage.getItem(CALENDAR_ID_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStudyCalendarId(calendarId: string): void {
+  try {
+    localStorage.setItem(CALENDAR_ID_STORAGE_KEY, calendarId);
+  } catch (e) {
+    console.error('Failed to cache calendar ID:', e);
+  }
+}
 
 /**
  * Sync time horizon configuration
@@ -346,7 +363,8 @@ export function clearGoogleCalendarCache(): void {
   const keysToRemove = [
     'googleCalendarSyncedIds',
     'googleCalendarRecentlyDeleted',
-    'googleCalendarLastSync'
+    'googleCalendarLastSync',
+    CALENDAR_ID_STORAGE_KEY
   ];
   
   // Remove known keys
@@ -374,28 +392,150 @@ export function clearGoogleCalendarCache(): void {
 }
 
 /**
- * Get or create dedicated study calendar
+ * Result of calendar lookup/creation
  */
-async function getOrCreateStudyCalendar(accessToken: string): Promise<string> {
-  if (studyCalendarId) return studyCalendarId;
+export interface CalendarSetupResult {
+  calendarId: string;
+  isNew: boolean;               // True if calendar was just created
+  existingCalendars: Array<{   // List of calendars with matching name
+    id: string;
+    summary: string;
+    description?: string;
+  }>;
+}
 
+/**
+ * Find existing calendars with the study planner name
+ * Used to detect conflicts and give user choice
+ */
+export async function findExistingStudyCalendars(accessToken: string): Promise<CalendarSetupResult['existingCalendars']> {
   try {
-    // Check if calendar already exists
     const data = await fetchJson('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
     });
-    const existingCalendar = data.items?.find(
+    
+    const matchingCalendars = (data.items || [])
+      .filter((cal: any) => cal.summary === STUDY_CALENDAR_NAME)
+      .map((cal: any) => ({
+        id: cal.id,
+        summary: cal.summary,
+        description: cal.description,
+      }));
+    
+    return matchingCalendars;
+  } catch (error) {
+    console.error('Error finding existing calendars:', error);
+    return [];
+  }
+}
+
+/**
+ * CRITICAL FIX (2024-11-22): Singleton pattern to prevent duplicate calendar creation
+ * 
+ * React StrictMode and multiple component renders can cause concurrent calls to
+ * getOrCreateStudyCalendar(), resulting in 3+ duplicate calendars being created.
+ * 
+ * Solution: Cache the in-flight promise so all concurrent calls wait for the same
+ * operation to complete. Only the first call actually executes the API calls.
+ * 
+ * Cache is keyed by accessToken to handle token changes (user logout/login).
+ */
+let calendarCreationPromiseCache: Map<string, Promise<string>> = new Map();
+
+/**
+ * CRITICAL FIX (2024-11-22): Singleton pattern to prevent duplicate session sync
+ * 
+ * Similar to calendar creation, React StrictMode can cause concurrent calls to
+ * syncSessionsToGoogleCalendar(), creating duplicate events for the same session.
+ * Each concurrent call creates a different googleEventId, leading to duplicates.
+ * 
+ * Solution: Cache the in-flight promise keyed by a hash of the sessions being synced.
+ * All concurrent calls for the same sessions wait for the same operation.
+ * 
+ * Cache key: Simple hash of session IDs sorted, to detect identical sync requests.
+ */
+let syncSessionsPromiseCache: Map<string, Promise<any>> = new Map();
+
+/**
+ * Get or create dedicated study calendar
+ * 
+ * Calendar ID is cached in localStorage to prevent creating duplicate calendars
+ * when multiple sync calls happen concurrently (e.g., React StrictMode double-mount)
+ * 
+ * IMPORTANT: Uses singleton pattern (promise cache) to prevent concurrent duplicate creation.
+ * All calls with same accessToken share the same promise, ensuring only one calendar is created.
+ * 
+ * Error handling:
+ * - If cached ID is invalid (calendar deleted), clears cache and searches again
+ * - If multiple calendars exist with same name, returns the first one found
+ * - Creates new calendar only if none exist
+ */
+async function getOrCreateStudyCalendar(accessToken: string, forceRefresh = false): Promise<string> {
+  // Check if there's already an in-flight request for this token
+  const cachedPromise = calendarCreationPromiseCache.get(accessToken);
+  if (cachedPromise && !forceRefresh) {
+    console.log('🔒 Calendar creation already in progress, waiting for existing operation...');
+    return cachedPromise;
+  }
+
+  // Create new promise for this operation
+  const operationPromise = (async () => {
+  // Check cache first (fast path) - but only if not forcing refresh
+  if (!forceRefresh) {
+    const cachedId = getStudyCalendarId();
+    if (cachedId) {
+      // Verify the cached calendar still exists
+      try {
+        await fetchJson(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cachedId)}`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        console.log(`📋 Using cached calendar ID: ${cachedId}`);
+        return cachedId;
+      } catch (error) {
+        // Calendar was deleted or ID is invalid - clear cache and search again
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        if (errorMsg.includes('404') || errorMsg.includes('Not Found')) {
+          console.warn('⚠️ Cached calendar no longer exists, clearing cache and searching...');
+          setStudyCalendarId(''); // Clear invalid cache
+          localStorage.removeItem(CALENDAR_ID_STORAGE_KEY);
+        } else {
+          // Other error - might be temporary, still try to use cache
+          console.warn('⚠️ Error verifying cached calendar, will try to use it anyway:', error);
+          return cachedId;
+        }
+      }
+    }
+  }
+
+  try {
+    // Check if calendar already exists in Google Calendar
+    console.log('🔍 Searching for existing calendar...');
+    const data = await fetchJson('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    const existingCalendars = (data.items || []).filter(
       (cal: any) => cal.summary === STUDY_CALENDAR_NAME
     );
 
-    if (existingCalendar) {
-      studyCalendarId = existingCalendar.id;
-      return existingCalendar.id;
+    if (existingCalendars.length > 0) {
+      // Use the first matching calendar
+      const calendar = existingCalendars[0];
+      console.log(`✅ Found existing calendar: ${calendar.id}`);
+      if (existingCalendars.length > 1) {
+        console.warn(`⚠️ Found ${existingCalendars.length} calendars with name "${STUDY_CALENDAR_NAME}", using first one`);
+      }
+      setStudyCalendarId(calendar.id);
+      return calendar.id;
     }
 
     // Create new calendar
+    console.log('➕ Creating new calendar...');
     const newCalendar = await fetchJson('https://www.googleapis.com/calendar/v3/calendars', {
       method: 'POST',
       headers: {
@@ -408,12 +548,33 @@ async function getOrCreateStudyCalendar(accessToken: string): Promise<string> {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     });
-    studyCalendarId = newCalendar.id;
+    console.log(`✅ Created new calendar: ${newCalendar.id}`);
+    setStudyCalendarId(newCalendar.id);
     return newCalendar.id;
   } catch (error) {
     console.error('Error getting/creating study calendar:', error);
     throw error;
   }
+  })(); // End of async IIFE
+
+  // Cache the promise to prevent concurrent duplicate operations
+  calendarCreationPromiseCache.set(accessToken, operationPromise);
+
+  // Clean up cache after operation completes (success or failure)
+  operationPromise.finally(() => {
+    calendarCreationPromiseCache.delete(accessToken);
+  });
+
+  return operationPromise;
+}
+
+/**
+ * Set which calendar to use for syncing
+ * Allows user to choose between multiple calendars with same name
+ */
+export function setActiveCalendar(calendarId: string): void {
+  setStudyCalendarId(calendarId);
+  console.log(`✅ Set active calendar: ${calendarId}`);
 }
 
 /**
@@ -551,25 +712,54 @@ function sessionToCalendarEvent(session: ScheduledSession, course: Course | unde
 
 /**
  * Sync sessions to Google Calendar (one-way: app -> calendar)
+ * 
+ * CRITICAL: Protected against concurrent calls via promise cache (React StrictMode fix)
  */
 export async function syncSessionsToGoogleCalendar(
   sessions: ScheduledSession[],
   courses: Course[],
   accessToken: string
-): Promise<{ success: boolean; syncedCount: number; stats: SyncStats; error?: string }> {
-  const stats: SyncStats = {
-    lastSyncTime: Date.now(),
-    lastSyncSuccess: false,
-    totalSynced: 0,
-    created: 0,
-    updated: 0,
-    skipped: 0,
-    deleted: 0,
-    recurring: 0,
-  };
+): Promise<{ success: boolean; syncedCount: number; stats: SyncStats; updatedSessions: ScheduledSession[]; error?: string }> {
+  // Create cache key from sorted session IDs to detect identical sync requests
+  const cacheKey = sessions.map(s => s.id).sort().join(',') + '::' + accessToken;
   
-  try {
-    const calendarId = await getOrCreateStudyCalendar(accessToken);
+  // Check if there's already an in-flight sync for these exact sessions
+  const cachedPromise = syncSessionsPromiseCache.get(cacheKey);
+  if (cachedPromise) {
+    console.log('🔒 Session sync already in progress for these sessions, waiting for existing operation...');
+    return cachedPromise;
+  }
+
+  // CRITICAL FIX (2024-11-22): Create promise and set cache entry IMMEDIATELY (before async work starts)
+  // to close race condition window. We need to create a deferred promise pattern.
+  let resolvePromise!: (value: any) => void;
+  
+  const syncPromise = new Promise<{ success: boolean; syncedCount: number; stats: SyncStats; updatedSessions: ScheduledSession[]; error?: string }>((resolve) => {
+    resolvePromise = resolve;
+  });
+  
+  // Set cache IMMEDIATELY before starting any async work
+  syncSessionsPromiseCache.set(cacheKey, syncPromise);
+  console.log('🔐 Created and cached sync promise for cache key:', cacheKey.substring(0, 50) + '...');
+
+  // Now start the actual sync work (will resolve/reject the promise)
+  (async () => {
+    const stats: SyncStats = {
+      lastSyncTime: Date.now(),
+      lastSyncSuccess: false,
+      totalSynced: 0,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      deleted: 0,
+      recurring: 0,
+    };
+    
+    // Track sessions that get googleEventIds assigned during sync
+    const updatedSessions: ScheduledSession[] = [];
+    
+    try {
+      const calendarId = await getOrCreateStudyCalendar(accessToken);
 
   // Get existing events from our calendar within a bounded window
   const now = new Date();
@@ -706,6 +896,11 @@ export async function syncSessionsToGoogleCalendar(
           if (created?.id) {
             existingEventsBySessionId.set(session.id, created);
             existingEventsByGoogleId.set(created.id, created);
+            
+            // CRITICAL FIX: Update session with googleEventId so it can be tracked
+            const updatedSession = { ...session, googleEventId: created.id };
+            updatedSessions.push(updatedSession);
+            console.log(`✅ Assigned googleEventId to session ${session.id}: ${created.id}`);
           }
           stats.created++;
         }
@@ -773,18 +968,26 @@ export async function syncSessionsToGoogleCalendar(
     stats.lastSyncSuccess = true;
     lsSet(syncStatsKey(calendarId), stats);
 
-    return { success: true, syncedCount, stats };
+    resolvePromise({ success: true, syncedCount, stats, updatedSessions });
   } catch (error) {
     console.error('Error syncing to Google Calendar:', error);
     stats.lastSyncSuccess = false;
     stats.lastSyncError = error instanceof Error ? error.message : 'Unknown error';
-    return {
+    resolvePromise({
       success: false,
       syncedCount: 0,
       stats,
+      updatedSessions: [],
       error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    });
+  } finally {
+    // Clean up cache after operation completes (success or failure)
+    syncSessionsPromiseCache.delete(cacheKey);
+    console.log('🗑️ Cleaned up sync promise cache for key:', cacheKey.substring(0, 50) + '...');
   }
+  })(); // End of async IIFE that resolves the promise
+
+  return syncPromise;
 }
 
 /**
@@ -1187,6 +1390,7 @@ export async function performTwoWaySync(
   syncedToCalendar: number;
   importedFromCalendar: any[];
   syncedSessionIds: string[];
+  deletedSessionIds: string[]; // NEW: Sessions deleted from Google Calendar
   error?: string;
 }> {
   try {
@@ -1205,7 +1409,9 @@ export async function performTwoWaySync(
       return true;
     });
     
-    console.log(`📊 Local sessions: ${localSessions.length} total, ${filteredLocalSessions.length} after filtering expanded instances`);
+    console.log(`📊 Local sessions (before sync): ${localSessions.length} total, ${filteredLocalSessions.length} after filtering expanded instances`);
+    console.log('   Sessions WITH googleEventId:', filteredLocalSessions.filter(s => s.googleEventId).map(s => `${s.id}:${s.googleEventId?.substring(0, 8)}...`).join(', ') || 'none');
+    console.log('   Sessions WITHOUT googleEventId:', filteredLocalSessions.filter(s => !s.googleEventId).map(s => `${s.id} (${s.date})`).join(', ') || 'none');
     
     // Use filtered sessions for the rest of the sync
     const localSessionsForSync = filteredLocalSessions;
@@ -1220,6 +1426,7 @@ export async function performTwoWaySync(
         syncedToCalendar: 0,
         importedFromCalendar: [],
         syncedSessionIds: [],
+        deletedSessionIds: [],
         error: importResult.error,
       };
     }
@@ -1228,14 +1435,18 @@ export async function performTwoWaySync(
 
     // Step 2: Get the list of session IDs that were previously synced to Google
     // This helps us distinguish between "new local session" vs "deleted from Google"
+    // IMPORTANT: Filter out any IDs that don't look like session IDs (starts with "session-")
+    // This handles corrupted cache from older versions that might have stored googleEventIds
     const previouslySyncedIds = new Set<string>(
       JSON.parse(localStorage.getItem('googleCalendarSyncedIds') || '[]')
+        .filter((id: string) => id.startsWith('session-'))
     );
 
     // Step 2b: Get recently deleted IDs (for grace period to prevent re-sync due to API delays)
     const recentlyDeletedIds = new Set<string>();
     try {
       const stored = localStorage.getItem('googleCalendarRecentlyDeleted');
+      console.log('📋 Loading recently deleted IDs from localStorage:', stored);
       if (stored) {
         const deletedMap: Record<string, number> = JSON.parse(stored);
         const now = Date.now();
@@ -1243,11 +1454,16 @@ export async function performTwoWaySync(
         
         // Only keep non-expired deletions
         Object.entries(deletedMap).forEach(([id, timestamp]) => {
-          if (now - timestamp <= FIVE_MINUTES) {
+          const age = now - timestamp;
+          if (age <= FIVE_MINUTES) {
             recentlyDeletedIds.add(id);
+            console.log(`  ✅ Session ${id} marked as recently deleted (age: ${Math.round(age / 1000)}s)`);
+          } else {
+            console.log(`  ⏱️ Session ${id} deletion expired (age: ${Math.round(age / 1000)}s > 300s)`);
           }
         });
       }
+      console.log(`📝 Total recently deleted IDs in grace period: ${recentlyDeletedIds.size}`);
     } catch (e) {
       console.error('Failed to load recently deleted IDs:', e);
     }
@@ -1284,6 +1500,7 @@ export async function performTwoWaySync(
     // Step 3: Build the merged result
     console.log('\n🔀 STEP 3: Merging local and remote sessions...');
     const mergedSessions: ScheduledSession[] = [];
+    const deletedSessionIds: string[] = []; // Track sessions deleted from Google Calendar
     const localById = new Map(localSessionsForSync.map(s => [s.id, s]));
     const remoteById = new Map(remoteSessions.map(s => [s.id, s]));
     const allIds = new Set([...localById.keys(), ...remoteById.keys()]);
@@ -1314,35 +1531,66 @@ export async function performTwoWaySync(
           
           // CRITICAL: Preserve recurrence data - never overwrite recurring master with single event
           if (local.recurrence && !remote.recurrence) {
-            console.log(`🔒 Session ${id} is recurring locally but not in remote - preserving local recurrence data`);
-            mergedSessions.push({ ...local, lastModified: Math.max(localMod, remoteMod) });
+            const merged = { 
+              ...local, 
+              lastModified: Math.max(localMod, remoteMod),
+              // CRITICAL: Preserve googleEventId from remote
+              googleEventId: remote.googleEventId || local.googleEventId,
+              googleCalendarId: remote.googleCalendarId || local.googleCalendarId,
+            };
+            console.log(`🔒 Session ${id} is recurring locally but not in remote - preserving local recurrence data`, {
+              local: { googleEventId: local.googleEventId, recurrence: local.recurrence?.rrule },
+              remote: { googleEventId: remote.googleEventId },
+              merged: { googleEventId: merged.googleEventId, googleCalendarId: merged.googleCalendarId }
+            });
+            mergedSessions.push(merged);
           } else if (!local.recurrence && remote.recurrence) {
             console.log(`🔒 Session ${id} is recurring in remote but not locally - using remote recurrence data`);
             mergedSessions.push({ ...remote });
           } else {
             // Both have same recurrence status - prefer newer
             const chosen = remoteMod > localMod ? remote : local;
-            console.log(`✏️ Session ${id} exists in both, using ${remoteMod > localMod ? 'remote' : 'local'} version (remote: ${new Date(remoteMod).toISOString()}, local: ${new Date(localMod).toISOString()})`, {
-              localRecurrence: local.recurrence?.rrule,
-              remoteRecurrence: remote.recurrence?.rrule,
-              chosenRecurrence: chosen.recurrence?.rrule
+            // CRITICAL: Always preserve googleEventId from remote (identifies the Google Calendar event)
+            const merged = {
+              ...chosen,
+              googleEventId: remote.googleEventId || chosen.googleEventId,
+              googleCalendarId: remote.googleCalendarId || chosen.googleCalendarId,
+            };
+            console.log(`✏️ Session ${id} exists in both, using ${remoteMod > localMod ? 'remote' : 'local'} version`, {
+              remote: { mod: new Date(remoteMod).toISOString(), googleEventId: remote.googleEventId },
+              local: { mod: new Date(localMod).toISOString(), googleEventId: local.googleEventId },
+              chosen: { version: remoteMod > localMod ? 'remote' : 'local', googleEventId: chosen.googleEventId },
+              merged: { googleEventId: merged.googleEventId, googleCalendarId: merged.googleCalendarId }
             });
-            mergedSessions.push({ ...chosen });
+            mergedSessions.push(merged);
           }
         } else {
           // Only in Google Calendar, not locally
           
           if (recentlyDeletedIds.has(id)) {
             // Recently deleted locally → ignore for grace period (API propagation delay)
-            console.log(`⏳ Session ${id} was recently deleted locally, ignoring (grace period for API sync)`);
+            console.log(`⏳ Session ${id} was recently deleted locally, ignoring (grace period for API sync)`, {
+              googleEventId: remote.googleEventId,
+              date: remote.date
+            });
             // Don't include it - deletion will propagate to Google Calendar
           } else if (previouslySyncedIds.has(id)) {
             // Was previously synced but now missing locally → deleted locally, should be deleted from Google
-            console.log(`🗑️ Session ${id} was deleted locally (in previouslySyncedIds but not in app state), will be removed from Google Calendar`);
+            console.log(`🗑️ Session ${id} was deleted locally (in previouslySyncedIds but not in app state), will be removed from Google Calendar`, {
+              googleEventId: remote.googleEventId,
+              date: remote.date,
+              startTime: remote.startTime,
+              courseId: remote.courseId
+            });
             // Don't include it in merged sessions - this will trigger deletion in syncSessionsToGoogleCalendar
           } else {
             // Never synced before → new session created in Google Calendar
-            console.log(`➕ Session ${id} only in Google Calendar, adding to app`);
+            console.log(`➕ Session ${id} only in Google Calendar, adding to app`, {
+              googleEventId: remote.googleEventId,
+              date: remote.date,
+              startTime: remote.startTime,
+              courseId: remote.courseId
+            });
             mergedSessions.push({ ...remote });
           }
         }
@@ -1350,7 +1598,8 @@ export async function performTwoWaySync(
         // Only exists locally
         if (previouslySyncedIds.has(id)) {
           // Was previously synced but now missing from Google → deleted in Google
-          console.log(`🗑️ Session ${id} was deleted from Google Calendar, removing from app`);
+          console.log(`🗑️ Session ${id} was deleted from Google Calendar, removing from app and backend`);
+          deletedSessionIds.push(id); // Track for deletion from backend DB
           // Don't include it in merged sessions
         } else {
           // Never synced before → new local session, push to Google
@@ -1368,7 +1617,8 @@ export async function performTwoWaySync(
     console.log(`│ Recurring masters: ${mergedSessions.filter(s => s.recurrence).length}`);
     console.log(`│ Standalone sessions: ${mergedSessions.filter(s => !s.recurrence && !s.recurringEventId).length}`);
     console.log(`│ Expanded instances (should be 0): ${mergedSessions.filter(s => s.recurringEventId && !s.recurrence).length}`);
-    console.log('│ Session IDs:', mergedSessions.map(s => s.id).join(', '));
+    console.log('│ Sessions WITH googleEventId:', mergedSessions.filter(s => s.googleEventId).map(s => `${s.id}:${s.googleEventId}`).join(', '));
+    console.log('│ Sessions WITHOUT googleEventId:', mergedSessions.filter(s => !s.googleEventId).map(s => s.id).join(', '));
     console.log('└─────────────────────────────────────────────────────────┘');
 
     // Step 5: Push merged sessions to Google Calendar
@@ -1385,6 +1635,7 @@ export async function performTwoWaySync(
         syncedToCalendar: 0,
         importedFromCalendar: mergedSessions,
         syncedSessionIds: [],
+        deletedSessionIds: deletedSessionIds,
         error: syncResult.error,
       };
     }
@@ -1394,6 +1645,19 @@ export async function performTwoWaySync(
     console.log(`   Updated: ${syncResult.stats.updated}`);
     console.log(`   Deleted: ${syncResult.stats.deleted}`);
     console.log(`   Skipped: ${syncResult.stats.skipped}`);
+
+    // CRITICAL FIX: Update mergedSessions with googleEventIds from newly created events
+    if (syncResult.updatedSessions.length > 0) {
+      console.log(`\n🔄 Updating ${syncResult.updatedSessions.length} sessions with new googleEventIds...`);
+      const updatedSessionsMap = new Map(syncResult.updatedSessions.map(s => [s.id, s]));
+      for (let i = 0; i < mergedSessions.length; i++) {
+        const updated = updatedSessionsMap.get(mergedSessions[i].id);
+        if (updated) {
+          mergedSessions[i] = updated;
+          console.log(`   ✅ Updated session ${updated.id} with googleEventId: ${updated.googleEventId}`);
+        }
+      }
+    }
 
     // Step 6: Track all merged session IDs as "synced" (after successful push)
     console.log('\n📝 STEP 6: Updating sync tracking...');
@@ -1448,6 +1712,7 @@ export async function performTwoWaySync(
       syncedToCalendar: syncResult.syncedCount,
       importedFromCalendar: mergedSessions,
       syncedSessionIds: syncedIds,
+      deletedSessionIds: deletedSessionIds,
       error: undefined,
     };
   } catch (error) {
@@ -1460,6 +1725,7 @@ export async function performTwoWaySync(
       syncedToCalendar: 0,
       importedFromCalendar: [],
       syncedSessionIds: [],
+      deletedSessionIds: [],
       error: error instanceof Error ? error.message : 'Unknown error',
     };
   }

@@ -70,9 +70,9 @@ export function StudyBlockDialog({ open, onClose, onSave, block }: StudyBlockDia
             <Label htmlFor="day">Wochentag *</Label>
             <Select value={dayOfWeek} onValueChange={setDayOfWeek}>
               <SelectTrigger id="day">
-                <SelectValue />
+                <SelectValue placeholder="Wochentag wählen" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="z-[200]">
                 {DAYS_DE.map((day, index) => (
                   <SelectItem key={index} value={index.toString()}>
                     {day}

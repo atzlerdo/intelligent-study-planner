@@ -22,6 +22,7 @@ interface WeekCalendarProps {
   onSessionMove?: (session: ScheduledSession, newDate: string, newStartTime: string, newEndTime: string) => void;
   // Google Calendar sync plumbing
   onSessionsImported?: (sessions: ScheduledSession[]) => void;
+  onSessionsDeleted?: (sessionIds: string[]) => void;
   autoSyncTrigger?: number;
   // Preview session for live editing
   previewSession?: ScheduledSession | null;
@@ -29,7 +30,7 @@ interface WeekCalendarProps {
   isDialogOpen?: boolean; // Whether any dialog is open (to prevent drag gestures)
 }
 
-export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, autoSyncTrigger, previewSession, /* editingSessionId unused */ isDialogOpen }: WeekCalendarProps) {
+export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSession, onSessionMove, onSessionsImported, onSessionsDeleted, autoSyncTrigger, previewSession, /* editingSessionId unused */ isDialogOpen }: WeekCalendarProps) {
   const isMobile = useIsMobile();
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -50,11 +51,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     const localDate = `${year}-${month}-${day}`;
-    console.log('📅 formatDateToLocal:', { 
-      input: date.toString(), 
-      output: localDate,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-    });
+    // Removed verbose logging - this is called hundreds of times during rendering
     return localDate;
   };
   
@@ -288,19 +285,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       }
     }
     const result = Array.from(byId.values());
-    // Debug: count expanded vs original
-    try {
-      const recurringCount = sessions.filter(s => !!s.recurrence).length;
-      console.log('🧩 Week expansion:', {
-        weekStart: start.toISOString().split('T')[0],
-        weekEnd: end.toISOString().split('T')[0],
-        inputSessions: sessions.length,
-        recurringMasters: recurringCount,
-        outputInstances: result.length
-      });
-    } catch {
-      // ignore debug logging errors in expansion
-    }
+    // Debug logging removed - too verbose during normal operation
+    // Uncomment if debugging recurring event expansion issues:
+    // const recurringCount = sessions.filter(s => !!s.recurrence).length;
+    // console.log('Week expansion:', { weekStart, weekEnd, inputSessions: sessions.length, recurringMasters: recurringCount, outputInstances: result.length });
     return result;
   }, [sessions, weekStart, weekEnd]);
   const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -361,16 +349,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         }
       }
     }
-    // Debug: List sessions for the day including expanded ones
-    try {
-      console.log('🗓️ Day sessions after expansion:', {
-        day: dateStr,
-        count: filteredSessions.length,
-        ids: filteredSessions.map(s => s.id)
-      });
-    } catch {
-      // Ignore debug logging errors
-    }
+    // Debug logging removed - called for every day rendered (too verbose)
     
     return filteredSessions;
   };
@@ -729,8 +708,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
 
   // Drag-to-create handlers
   const handleCellMouseDown = (date: Date, e: React.MouseEvent) => {
-    // Don't create a new session if we're interacting with an existing session or a dialog is open
-    if (!onCreateSession || draggedSession || isInteractingWithSession || isDialogOpen) return;
+    // Don't create a new session if we're interacting with an existing session
+    if (!onCreateSession || draggedSession || isInteractingWithSession) return;
     
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
@@ -864,6 +843,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         sessions={sessions}
         courses={courses}
         onSessionsImported={onSessionsImported}
+        onSessionsDeleted={onSessionsDeleted}
         autoSyncTrigger={autoSyncTrigger}
         onStateChange={({ isConnected, isSyncing }) => {
           setGoogleConnected(isConnected);
