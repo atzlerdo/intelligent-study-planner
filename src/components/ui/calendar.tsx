@@ -92,12 +92,18 @@ export function Calendar({
     return d;
   }, []);
   const [internalMonth, setInternalMonth] = React.useState<Date>(month || selected || new Date());
+  
+  // Extract month/year for dependency tracking to avoid complex expressions
+  const monthYear = month?.getFullYear();
+  const monthMonth = month?.getMonth();
+  
   React.useEffect(() => {
     if (month) setInternalMonth(month);
-  }, [month?.getFullYear(), month?.getMonth()]);
+  }, [month, monthYear, monthMonth]);
 
   const view = startOfMonth(internalMonth);
-  const cells = React.useMemo(() => getMonthGrid(view, showOutsideDays), [view.getFullYear(), view.getMonth(), showOutsideDays]);
+  
+  const cells = React.useMemo(() => getMonthGrid(view, showOutsideDays), [view, showOutsideDays]);
 
   const [showMonthPicker, setShowMonthPicker] = React.useState(false);
   const [showYearPicker, setShowYearPicker] = React.useState(false);

@@ -151,7 +151,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [draggedSession, dragStartPos, dragSessionPosition, onSessionMove]);
+  }, [draggedSession, dragStartPos, dragSessionPosition, onSessionMove, isDialogOpen]);
 
   // Track initial mount to determine scroll behavior
   const [isInitialMount, setIsInitialMount] = useState(true);
@@ -227,7 +227,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       
       if (isInitialMount) setIsInitialMount(false);
     }
-  }, [currentWeekOffset, isCurrentWeek, isMobile, isInitialMount, savedScrollPosition]);
+  }, [currentWeekOffset, currentTime, isCurrentWeek, isMobile, isInitialMount, savedScrollPosition]);
 
   const allHours = Array.from({ length: 24 }, (_, i) => i);
 
