@@ -85,7 +85,8 @@ function App() {
   // ============================================================================
   
   const [showReplanDialog, setShowReplanDialog] = useState(false);           // Show replan confirmation dialog
-  const [replanCandidate, setReplanCandidate] = useState<ScheduledSession | null>(null); // Session being replanned
+  const [replanCandidates, setReplanCandidates] = useState<ScheduledSession[]>([]); // Sessions selected for replanning
+  const [replanTotalMinutes, setReplanTotalMinutes] = useState(0);           // Total minutes covered by candidates
   const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null); // Original missed session
   const [replanHandled, setReplanHandled] = useState(false);                 // Flag to prevent duplicate replan prompts
   
@@ -1169,12 +1170,28 @@ function App() {
   // Helper: parse local datetime
   const parseLocalDateTime = (dateStr: string, timeStr: string) => new Date(`${dateStr}T${timeStr}`);
 
-  // Find the next unassigned study session in the future
-  const findNextUnassignedSession = (after: Date): ScheduledSession | null => {
-    const candidates = scheduledSessions
+  // Find unassigned study sessions in the future (sorted soonest-first)
+  const findUnassignedSessionsAfter = (after: Date): ScheduledSession[] => {
+    return scheduledSessions
       .filter((s) => !s.courseId && !s.completed && parseLocalDateTime(s.date, s.startTime).getTime() > after.getTime())
       .sort((a, b) => parseLocalDateTime(a.date, a.startTime).getTime() - parseLocalDateTime(b.date, b.startTime).getTime());
-    return candidates[0] || null;
+  };
+
+  // Gather unassigned sessions until the required minutes are covered (allow over-planning)
+  const collectReplanSlots = (after: Date, requiredMinutes: number) => {
+    const candidates = findUnassignedSessionsAfter(after);
+    const selected: ScheduledSession[] = [];
+    let totalMinutes = 0;
+
+    for (const slot of candidates) {
+      selected.push(slot);
+      totalMinutes += slot.durationMinutes;
+      if (totalMinutes >= requiredMinutes) {
+        break;
+      }
+    }
+
+    return { selected, totalMinutes };
   };
 
   // Apply: user did not attend and does NOT want automatic replanning
@@ -1225,56 +1242,61 @@ function App() {
     }
   };
 
-  // Apply: user did not attend and WANTS automatic replanning into next unassigned session
-  const applyNotAttendedWithReplan = async (session: ScheduledSession, target: ScheduledSession) => {
+  // Apply: user did not attend and WANTS automatic replanning into unassigned sessions
+  const applyNotAttendedWithReplan = async (session: ScheduledSession, targets: ScheduledSession[]) => {
     const course = courses.find((c) => c.id === session.courseId);
     if (!course) return;
+    if (!targets.length) {
+      await applyNotAttendedWithoutReplan(session);
+      return;
+    }
 
     const missedHours = session.durationMinutes / 60;
-    const targetHours = target.durationMinutes / 60;
+    const targetHours = targets.reduce((sum, t) => sum + t.durationMinutes / 60, 0);
 
     try {
-      console.log('🔁 Replan start:', {
+      console.log('dY"? Replan start:', {
         missedSessionId: session.id,
-        targetSessionId: target.id,
+        targetSessionIds: targets.map(t => t.id),
         courseId: session.courseId,
         missedDuration: session.durationMinutes,
-        targetDuration: target.durationMinutes,
+        targetDuration: targetHours * 60,
       });
 
-      // 1) Delete missed session (treat 404 as success – ghost session)
+      // 1) Delete missed session (treat 404 as success)
       try {
         await apiDeleteSession(session.id);
-        console.log('✅ Deleted missed session in backend:', session.id);
+        console.log('?o. Deleted missed session in backend:', session.id);
       } catch (delErr: unknown) {
-        // Type guard for error object with message property
         const msg = (delErr as { message?: string })?.message || '';
         if (msg.includes('Session not found')) {
-          console.warn('⚠️ Missed session already absent (404), proceeding:', session.id);
+          console.warn('?s??,? Missed session already absent (404), proceeding:', session.id);
           setScheduledSessions(prev => prev.filter(s => s.id !== session.id));
         } else {
-          console.error('❌ Failed deleting missed session, aborting replan:', delErr);
-          return; // Abort replan if delete truly fails
+          console.error('??O Failed deleting missed session, aborting replan:', delErr);
+          return;
         }
       }
 
-      // 2) Assign target session to course
-      try {
-        await apiUpdateSession(target.id, {
-          courseId: session.courseId, // Assign course
-          studyBlockId: target.studyBlockId,
-          date: target.date,
-          startTime: target.startTime,
-          endTime: target.endTime,
-          durationMinutes: target.durationMinutes,
-          notes: target.notes,
-          endDate: target.endDate,
-        });
-        console.log('✅ Target session updated & assigned:', target.id);
-      } catch (updErr) {
-        console.error('❌ Failed updating target session during replan:', updErr);
-        // Attempt local optimistic assignment so user sees change
-        setScheduledSessions(prev => prev.map(s => s.id === target.id ? { ...s, courseId: session.courseId } : s));
+      // 2) Assign target sessions to course
+      for (const target of targets) {
+        try {
+          await apiUpdateSession(target.id, {
+            courseId: session.courseId, // Assign course
+            studyBlockId: target.studyBlockId,
+            date: target.date,
+            startTime: target.startTime,
+            endTime: target.endTime,
+            durationMinutes: target.durationMinutes,
+            notes: target.notes,
+            endDate: target.endDate,
+          });
+          console.log('?o. Target session updated & assigned:', target.id);
+        } catch (updErr) {
+          console.error('??O Failed updating target session during replan:', updErr);
+          // Attempt local optimistic assignment so user sees change
+          setScheduledSessions(prev => prev.map(s => s.id === target.id ? { ...s, courseId: session.courseId } : s));
+        }
       }
 
       // 3) Refresh authoritative data (let backend recalc scheduledHours)
@@ -1282,13 +1304,13 @@ function App() {
         const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
         setCourses(freshCourses as Course[]);
         setScheduledSessions(freshSessions as ScheduledSession[]);
-        console.log('🔄 Replan backend refresh complete');
+        console.log('Replan backend refresh complete');
       } catch (refreshErr) {
-        console.error('❌ Replan refresh failed – applying local fallback', refreshErr);
+        console.error('Replan refresh failed; applying local fallback', refreshErr);
         // Local fallback: remove missed session, assign target courseId, adjust scheduledHours
         setScheduledSessions(prev => prev
           .filter(s => s.id !== session.id)
-          .map(s => s.id === target.id ? { ...s, courseId: session.courseId } : s)
+          .map(s => targets.some(t => t.id === s.id) ? { ...s, courseId: session.courseId } : s)
         );
         setCourses(prev => prev.map(c => {
           if (c.id !== course.id) return c;
@@ -1299,7 +1321,7 @@ function App() {
         }));
       }
 
-      console.log('✅ Replan complete');
+      console.log('?o. Replan complete');
     } catch (error) {
       console.error('Unexpected replan wrapper failure:', error);
     }
@@ -1308,19 +1330,18 @@ function App() {
   const handleSessionNotAttended = () => {
     if (!feedbackSession) return;
 
-    // Determine next unassigned session
     const now = new Date();
-    const candidate = findNextUnassignedSession(now);
+    const requiredMinutes = feedbackSession.durationMinutes;
+    const { selected, totalMinutes } = collectReplanSlots(now, requiredMinutes);
 
-    // Store state for replan prompt
     setMissedSession(feedbackSession);
-    setReplanCandidate(candidate);
+    setReplanCandidates(selected);
+    setReplanTotalMinutes(totalMinutes);
+    setReplanHandled(false);
     
-    // Close attendance dialog first
     setShowAttendanceDialog(false);
     setFeedbackSession(null);
     
-    // Open replan prompt after a delay to ensure attendance dialog overlay is fully removed
     setTimeout(() => {
       setShowReplanDialog(true);
     }, 300);
@@ -2028,6 +2049,10 @@ function App() {
     );
   }
 
+  const requiredReplanMinutes = missedSession?.durationMinutes ?? 0;
+  const hasReplanCoverage = replanCandidates.length > 0 && replanTotalMinutes >= requiredReplanMinutes;
+  const missingReplanMinutes = Math.max(0, requiredReplanMinutes - replanTotalMinutes);
+
   return (
     <div className="h-screen lg:overflow-hidden bg-gray-50 flex flex-col">
       {migrating && (
@@ -2141,7 +2166,8 @@ function App() {
             }, 0);
             setShowReplanDialog(false);
             setMissedSession(null);
-            setReplanCandidate(null);
+            setReplanCandidates([]);
+            setReplanTotalMinutes(0);
             setReplanHandled(false);
           }
         }}
@@ -2155,20 +2181,19 @@ function App() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="text-sm text-gray-700 space-y-2">
-            {replanCandidate ? (
+            {hasReplanCoverage ? (
               <p>
-                Möchtest du die verpasste Session automatisch in die nächste nicht zugewiesene Study Session verschieben?<br />
-                Vorschlag: {new Date(`${replanCandidate.date}T${replanCandidate.startTime}`).toLocaleString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                Moechtest du die verpasste Session automatisch in die naechsten freien Study Sessions verschieben?<br />
+                Neue Slots: {replanCandidates.length} - Geplante Minuten: {replanTotalMinutes} / Benoetigt: {requiredReplanMinutes}
               </p>
             ) : (
               <p>
-                Es wurde keine zukünftige, nicht zugewiesene Study Session gefunden. Lege in deinem Kalender freie
-                <span className="font-medium"> "📚 Study Session"</span>-Slots an – dann kann die App verpasste Sessions automatisch dorthin verschieben.
+                Nicht genug freie Study Sessions gefunden. Fehlende Minuten: {missingReplanMinutes}. Die Session wird als nicht wahrgenommen markiert.
               </p>
             )}
           </div>
           <AlertDialogFooter>
-            {replanCandidate ? (
+            {hasReplanCoverage ? (
               <>
                 <AlertDialogCancel
                   onClick={() => {
@@ -2184,8 +2209,8 @@ function App() {
                 </AlertDialogCancel>
                 <AlertDialogAction
                   onClick={() => {
-                    if (missedSession && replanCandidate) {
-                      applyNotAttendedWithReplan(missedSession, replanCandidate);
+                    if (missedSession && replanCandidates.length) {
+                      applyNotAttendedWithReplan(missedSession, replanCandidates);
                     }
                     setReplanHandled(true);
                     setShowReplanDialog(false);
@@ -2322,3 +2347,8 @@ function App() {
 }
 
 export default App;
+
+
+
+
+
