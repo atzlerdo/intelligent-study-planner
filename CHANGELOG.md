@@ -1,5 +1,275 @@
 # Changelog
 
+## [v0.6.9] - 2024-11-24
+
+### Fixed - Past Sessions Counted as Scheduled Hours
+- **Problem**: When creating a session in the past (e.g., session at 06:00 when it's now 08:00), the session was incorrectly counted in "planned hours" instead of being excluded
+- **Example**: Created session on Nov 24 06:00-07:00 (past) → scheduledHours jumped from 7.75h to 8.75h (WRONG)
+- **Root cause**: All three scheduledHours calculation points were using date-only comparison (`session.date < today`), which failed for past sessions on the current day
+- **Impact**: 
+  - Past sessions showed in yellow "planned hours" bar instead of being excluded
+  - Marking them attended didn't reduce planned hours (stayed at inflated value)
+  - Progress bars showed incorrect future workload
+- **Fix**: Changed ALL scheduledHours calculations to compare session **end time** (date + time) with current timestamp
+- **Technical Details**:
+  - **OLD**: `session.date < today` → Only excluded sessions from previous days
+  - **NEW**: `new Date(session.date + 'T' + session.endTime) <= now` → Excludes any session that has ended
+  - Applied to all three calculation points:
+    1. Initial app load (lines 862-875)
+    2. Session create/edit/delete (lines 1625-1638)
+    3. Attendance tracking (lines 1107-1120)
+    4. Course auto-activation check (lines 1673-1681)
+- **Why it matters**: Users often create past sessions to log study time retroactively. These should NEVER appear in "planned hours" (yellow bar), only in "completed hours" (green bar) after marking attended.
+
+## [v0.6.8] - 2024-11-24
+
+### Fixed - scheduledHours Jump When Marking Past Sessions Complete
+- **Problem**: When marking a past session as attended, scheduledHours jumped to incorrect value (e.g., 23h instead of staying at current value)
+- **Root cause**: `handleSessionFeedback` was refreshing courses from backend but NOT recalculating `scheduledHours` from session data
+- **Impact**: Progress bars showed wrong "planned hours" after attendance tracking, confusing users
+- **Fix**: Added same scheduledHours recalculation logic used in `handleSaveSession` to `handleSessionFeedback`
+- **Technical Details**:
+  - After updating session attendance (line 1100), courses are refreshed from backend
+  - **NEW**: Calculate `scheduledHours` from future sessions (date >= today) before updating state
+  - Ensures consistency: scheduled hours always accurate after ANY session operation
+  - Same calculation pattern: initial load, session create/edit, attendance tracking
+- **Log output**: Shows if scheduledHours corrected: `"📊 Attendance update - Course [name]: scheduledHours [old]h → [new]h"`
+
+## [v0.6.7] - 2024-11-24
+
+### Fixed - Progress Bars Incorrect on Initial App Load
+- **Problem**: When the app loaded, progress bars showed incorrect values until first session was created/edited
+- **Root cause**: Backend returned courses with potentially stale `scheduledHours` values. The app was recalculating `completedHours` on load (to fix attendance tracking bugs) but NOT recalculating `scheduledHours`
+- **Impact**: Users saw wrong progress bars on page load, creating confusion and lack of trust
+- **Fix**: Added `scheduledHours` recalculation during initial app load (same logic used after session changes)
+- **Technical Details**:
+  - On initial load (line 850), after fetching courses and sessions:
+    1. Recalculate `completedHours` from attended sessions (existing fix)
+    2. **NEW**: Recalculate `scheduledHours` from future sessions (date >= today)
+    3. Update course state with both corrected values
+  - Same calculation logic as used in `handleSaveSession` (lines 1570-1584)
+  - Ensures consistency: progress bars accurate immediately on app load
+- **Log output**: Shows which courses had scheduledHours corrected: `"📊 Initial load - Course [name]: scheduledHours [old]h → [new]h"`
+
+## [v0.6.6] - 2024-11-24
+
+### Fixed - Unassigned Future Sessions Not Counted in Overall Progress
+- **Problem**: Unassigned sessions (blockers/planned time) in the future were not counted in the overall progress bar's "scheduled hours" segment
+- **Impact**: Progress bar showed less scheduled time than reality, making it look like less study time was planned
+- **Root cause**: `course.scheduledHours` only tracks sessions assigned to courses. Unassigned future sessions were excluded from overall totals.
+- **Fix**: Dashboard now adds unassigned future session hours to the total scheduled hours calculation
+- **Technical Details**:
+  - **Overall progress bar**: Counts both assigned sessions (from `course.scheduledHours`) AND unassigned future sessions
+  - **Per-course progress bars**: Still only count sessions assigned to that specific course (correct behavior)
+  - **Calculation**:
+    ```typescript
+    // Course scheduled hours (assigned sessions only)
+    const scheduledHoursFromCourses = activeCourses.reduce((sum, c) => sum + c.scheduledHours, 0);
+    
+    // Add unassigned future sessions (blockers/planned time)
+    const unassignedFutureHours = scheduledSessions
+      .filter(s => !s.courseId && !s.completed && s.date >= today)
+      .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
+    
+    const scheduledHours = scheduledHoursFromCourses + unassignedFutureHours;
+    ```
+- **Why this matters**: Users create unassigned "blocker" sessions to reserve study time before deciding which course to work on. These should count toward total planned study hours.
+
+## [v0.6.5] - 2024-11-24
+
+### Fixed - Progress Bar Jumping Issue
+- **Problem**: When creating/deleting sessions, the progress bar would jump between different values (e.g., 21h → 5h → 21h)
+- **Root cause**: `Dashboard.tsx` was calculating `scheduledHours` from sessions independently, while `App.tsx` was also calculating and storing it in `course.scheduledHours`. These calculations ran at different times, causing race conditions and inconsistent UI updates.
+- **Impact**: 
+  - Progress bar showed incorrect values during session operations
+  - Created visual confusion and lack of trust in the data
+  - Yellow "planned" segment flickered between different sizes
+- **Fix**: Changed Dashboard to use `course.scheduledHours` as single source of truth instead of recalculating from sessions
+- **Technical Details**:
+  - **Old behavior** (WRONG):
+    ```typescript
+    // Dashboard.tsx lines 51-53
+    const scheduledHours = scheduledSessions
+      .filter(s => !s.completed && s.date >= today)
+      .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
+    ```
+  - **New behavior** (CORRECT):
+    ```typescript
+    // Dashboard.tsx lines 49-52
+    const scheduledHours = activeCourses.reduce((sum, c) => sum + c.scheduledHours, 0);
+    ```
+  - `course.scheduledHours` is updated atomically with session changes in App.tsx (lines 1571-1580)
+  - This ensures UI consistency across all components
+- **Side effect fixed**: Overall progress bar now stable, per-course progress bars also fixed
+
+## [v0.6.4] - 2024-11-24
+
+### Fixed - Unassigned Session Workflow (courseId Persistence & Color Logic)
+- **🔴 CRITICAL UPDATE**: Fixed unassigned sessions not showing as green after marking attended and assigning to course
+- **Discovery**: After marking unassigned session (courseId: null) as attended AND assigning it to a course:
+  1. Backend correctly saved courseId and completed flag ✅
+  2. BUT merge logic overwrote incoming courseId with stale local courseId: null ❌
+  3. Session appeared to "disappear" or stay gray even though marked attended
+- **Root causes**:
+  1. **courseId persistence bug**: Same merge issue as v0.6.3 but for `courseId` field instead of `completed`
+  2. **Color logic order bug**: `getSessionColor()` checked `if (!courseId)` BEFORE checking `if (completed)`, so unassigned sessions returned gray immediately
+- **Impact**: 
+  - Unassigned sessions marked attended never turned green
+  - Assigning courseId to unassigned session didn't persist in UI
+  - Sessions with courseId assigned from creation worked perfectly (see v0.6.2+v0.6.3)
+  - Retroactive time tracking workflow completely broken
+- **Symptoms**:
+  - User clicks unassigned past session (gray block)
+  - Marks attended, assigns to course, saves
+  - Evaluation button disappears ✅
+  - Course hours update correctly ✅
+  - BUT session still gray (or appears to vanish if in course-filtered view)
+  - Logs showed: "🎯 WILL USE courseId: course-xxx" but UI still had courseId: null
+- **Fix #1**: Added `courseId: incoming.courseId` to both merge paths in `mergeSessionsPreserveGoogle` (same locations as v0.6.3 fix)
+- **Fix #2**: Reordered `getSessionColor()` to check `completed` BEFORE checking `courseId` so unassigned sessions can show as green
+
+### Technical Details
+- **Fix location #1**: `src/App.tsx` lines 110-137 (Google-linked sessions merge)
+- **Fix location #2**: `src/App.tsx` lines 144-165 (fresher local sessions merge)
+- **Fix location #3**: `src/components/WeekCalendar.tsx` lines 375-391 (color logic reordering)
+- **Old merge behavior** (WRONG):
+  ```typescript
+  return {
+    ...incoming,
+    ...local,  // ❌ Overwrites courseId from backend
+    completed: incoming.completed,
+    completionPercentage: incoming.completionPercentage,
+    // ... more fields
+  };
+  ```
+- **New merge behavior** (CORRECT):
+  ```typescript
+  return {
+    ...incoming,
+    ...local,
+    // Backend is source of truth for attendance AND course assignments
+    completed: incoming.completed,
+    completionPercentage: incoming.completionPercentage,
+    courseId: incoming.courseId,  // ✅ Preserve from backend
+    // ... more fields
+  };
+  ```
+- **Old color logic** (WRONG):
+  ```typescript
+  if (!session.courseId) {
+    return 'gray';  // ❌ Returns BEFORE checking completed
+  }
+  if (session.completed) {
+    return 'green';  // Never reached for unassigned
+  }
+  ```
+- **New color logic** (CORRECT):
+  ```typescript
+  if (session.completed) {
+    return 'green';  // ✅ Check completed FIRST
+  }
+  if (!session.courseId) {
+    return 'gray';  // Only for unassigned pending sessions
+  }
+  ```
+- **Enhanced logging**: Added courseId tracking to merge logs (🚨 LOCAL courseId, ✅ INCOMING courseId, 🎯 WILL USE courseId)
+
+### Complete Workflow Now Working
+1. Create unassigned session (blocker) in past → gray
+2. Mark attended → SessionAttendanceDialog appears
+3. Click "Yes, I attended" → SessionFeedbackDialog appears
+4. Select course, enter hours/progress → Save
+5. Backend saves courseId + completed + completionPercentage ✅
+6. Merge preserves ALL three fields from backend ✅
+7. Color logic checks completed first → session turns green ✅
+8. Session visible in course-filtered views ✅
+
+## [v0.6.3] - 2024-11-24
+
+### Fixed - Critical Session Merge Bug (Attendance Data Loss) - PART 2
+- **🔴 CRITICAL UPDATE**: Fixed SECOND location where merge logic was overwriting attendance data
+- **Discovery**: After initial fix to `handleGoogleCalendarSync`, attendance data was STILL being lost in `mergeSessionsPreserveGoogle` helper function
+- **Root cause**: Two places in merge logic were spreading `...local` over `...incoming`, which overwrote backend `completed: true` with stale local `completed: false`:
+  1. When `isProtected || local.googleEventId` (lines 110-128)
+  2. When `localLast > incomingLast` (lines 135-151)
+- **Evidence**: Log showed session clicked with `completed: false` AFTER marking attended, progress bar increased but session stayed yellow
+- **Impact**: 
+  - Users saw sessions as "not attended" even after marking them
+  - Clicking the same session again opened attendance dialog
+  - Combined with v0.6.2 idempotency fix, prevented duplicate hour counting BUT didn't fix UI
+- **Symptoms**:
+  - Green "completed" sessions appeared as yellow "pending evaluation"
+  - Past sessions could be marked attended repeatedly
+  - Progress bar "verbracht" (completed hours) increased correctly but session color wrong
+- **Fix**: Changed `mergeSessionsPreserveGoogle` to explicitly preserve `completed` and `completionPercentage` from incoming (backend) data after spreading `...local`
+- **Side effect fixed**: Sessions now turn green immediately after marking attended (no longer require page reload)
+
+### Technical Details
+- **Fix location #1**: `src/App.tsx` lines 110-128 in `mergeSessionsPreserveGoogle` (Google-linked sessions)
+- **Fix location #2**: `src/App.tsx` lines 135-151 in `mergeSessionsPreserveGoogle` (fresher local sessions)
+- **Old behavior** (WRONG):
+  ```typescript
+  return {
+    ...incoming,
+    ...local,  // ❌ Overwrites ALL fields including completed
+    date: local.date,
+    startTime: local.startTime,
+    // ... more fields
+  };
+  ```
+- **New behavior** (CORRECT):
+  ```typescript
+  return {
+    ...incoming,
+    ...local,
+    // CRITICAL FIX: Backend is source of truth for attendance tracking
+    completed: incoming.completed,  // ✅ Preserve from backend
+    completionPercentage: incoming.completionPercentage,
+    date: local.date,
+    startTime: local.startTime,
+    // ... more fields
+  };
+  ```
+- **Why this happened**: Merge logic was designed to preserve local changes during Google Calendar sync (date/time changes from drag-and-drop), but `completed`/`completionPercentage` are NOT Google Calendar fields - they're database-only fields that should ALWAYS come from backend
+
+### Combined Fix with v0.6.2
+Together with v0.6.2's idempotency fix, this resolves the complete attendance tracking bug:
+1. **v0.6.2**: Prevents adding hours if session already marked completed
+2. **v0.6.3**: Ensures `completed` flag persists correctly so v0.6.2's check works
+3. **v0.6.3 Part 2**: Fixes ALL merge locations that were overwriting attendance data
+
+## [v0.6.2] - 2024-11-24
+
+### Fixed - Critical Attendance Tracking Idempotency Bug
+- **🔴 CRITICAL: Attendance marking is now idempotent**: Fixed bug where marking the same past session as attended multiple times kept incrementing course `completedHours` each time
+- **Root cause**: `handleSessionFeedback` always added session hours to course completion without checking if session was already marked completed
+- **Impact**: Users could artificially inflate completion hours by repeatedly marking same session attended
+- **Detection**: Integrity check on app load detected `completedHours` mismatches (DB said 4 hours, but no sessions marked completed), auto-corrected to 0
+- **Fix**: Added check for `feedbackSession.completed` before incrementing hours. If already completed, `hoursToAdd = 0` (idempotent behavior)
+- **Enhanced logging**: Attendance updates now log `wasAlreadyCompleted` flag and idempotency status
+
+### Technical Details
+- **Fix location**: `src/App.tsx` lines 1023-1043 in `handleSessionFeedback`
+- **Logic**: 
+  ```typescript
+  const wasAlreadyCompleted = feedbackSession.completed;
+  const hoursToAdd = wasAlreadyCompleted ? 0 : feedback.completedHours;
+  const newCompletedHours = targetCourse.completedHours + hoursToAdd;
+  ```
+- **Behavior**: Marking attended once adds hours, marking again updates progress % but doesn't re-add hours
+
+### Example Log Evidence
+Before fix:
+```
+📈 Updating course completedHours: {old: 7, added: 3, new: 10}   // First marking
+📈 Updating course completedHours: {old: 10, added: 3, new: 13}  // Second marking (BUG!)
+```
+After fix:
+```
+📈 Updating course completedHours: {old: 7, added: 3, new: 10, idempotent: '➕ Adding hours for first-time completion'}
+📈 Updating course completedHours: {old: 10, added: 0, new: 10, wasAlreadyCompleted: true, idempotent: '✅ No duplicate hours added'}
+```
+
 ## [v0.6.1] - 2024-11-24
 
 ### Fixed - Critical Database Persistence Bug

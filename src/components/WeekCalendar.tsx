@@ -373,11 +373,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   };
 
   const getSessionColor = (session: ScheduledSession): string => {
-    // Unassigned sessions (blockers) - neutral gray styling
-    if (!session.courseId) {
-      return 'bg-gray-100 border-gray-400 text-gray-700 shadow-sm';
-    }
-    
+    // CRITICAL FIX (v0.6.4): Check completed status FIRST, regardless of courseId
+    // This allows unassigned sessions to show as green when marked attended and assigned to a course
     if (session.completed) {
       // Check if this was attended (has completionPercentage > 0) or not attended
       if (session.completionPercentage && session.completionPercentage > 0) {
@@ -385,6 +382,12 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       } else {
         return 'bg-gray-100 border-gray-400 text-gray-600 shadow-sm';
       }
+    }
+    
+    // Unassigned sessions (blockers) - neutral gray styling
+    // Only checked AFTER completed check so attended unassigned sessions can show as green
+    if (!session.courseId) {
+      return 'bg-gray-100 border-gray-400 text-gray-700 shadow-sm';
     }
     
     // Check if session has valid endTime
@@ -411,6 +414,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         course: session.courseId,
         dateString: session.date,
         timeString: `${session.startTime} - ${session.endTime}`,
+        '🏁 completed': session.completed,
+        '📊 completionPercentage': session.completionPercentage,
         parsedDate: {
           year,
           month,
@@ -424,7 +429,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         nowTimestamp: now.getTime(),
         difference: (sessionEndDate.getTime() - now.getTime()) / 1000 / 60, // minutes
         isPast,
-        willBeColor: isPast ? 'RED' : 'YELLOW'
+        willBeColor: session.completed ? 'GREEN' : (isPast ? 'RED' : 'BLUE')
       });
       
       // Session has ended and needs evaluation

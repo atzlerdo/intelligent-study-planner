@@ -118,10 +118,21 @@ function App() {
           chosenLast: latest,
           localDate: `${local.date} ${local.startTime}-${local.endTime}`,
           incomingDate: `${incoming.date} ${incoming.startTime}-${incoming.endTime}`,
+          // CRITICAL: Attendance data from backend
+          '🚨 LOCAL completed': local.completed,
+          '✅ INCOMING completed': incoming.completed,
+          '🎯 WILL USE': incoming.completed,
+          '🚨 LOCAL courseId': local.courseId,
+          '✅ INCOMING courseId': incoming.courseId,
+          '🎯 WILL USE courseId': incoming.courseId,
         });
         return {
           ...incoming,
           ...local,
+          // CRITICAL FIX: Backend is source of truth for attendance tracking AND course assignments
+          completed: incoming.completed,
+          completionPercentage: incoming.completionPercentage,
+          courseId: incoming.courseId,
           date: local.date,
           startTime: local.startTime,
           endTime: local.endTime,
@@ -139,10 +150,21 @@ function App() {
           incomingLast,
           localDate: `${local.date} ${local.startTime}-${local.endTime}`,
           incomingDate: `${incoming.date} ${incoming.startTime}-${incoming.endTime}`,
+          // CRITICAL: Attendance data from backend
+          '🚨 LOCAL completed': local.completed,
+          '✅ INCOMING completed': incoming.completed,
+          '🎯 WILL USE': incoming.completed,
+          '🚨 LOCAL courseId': local.courseId,
+          '✅ INCOMING courseId': incoming.courseId,
+          '🎯 WILL USE courseId': incoming.courseId,
         });
         return {
           ...incoming,
           ...local,
+          // CRITICAL FIX: Backend is source of truth for attendance tracking AND course assignments
+          completed: incoming.completed,
+          completionPercentage: incoming.completionPercentage,
+          courseId: incoming.courseId,
           googleEventId: local.googleEventId ?? incoming.googleEventId,
           googleCalendarId: local.googleCalendarId ?? incoming.googleCalendarId,
         };
@@ -835,7 +857,37 @@ function App() {
           sessions as ScheduledSession[]
         );
         
-        setCourses(recalculatedCourses);
+        // CRITICAL FIX (v0.6.7): Recalculate scheduledHours on app load
+        // Backend might have stale scheduledHours values - recalculate from actual sessions
+        console.log('🔍 Recalculating scheduledHours from session data...');
+        const now = new Date();
+        const scheduledHoursByCourse = new Map<string, number>();
+        
+        for (const session of sessions) {
+          if (!session.courseId) continue;
+          
+          // Parse session end time to determine if it's in the future
+          const sessionEndDateTime = new Date(`${session.date}T${session.endTime}`);
+          if (sessionEndDateTime <= now) continue; // Skip past sessions
+          
+          const hours = session.durationMinutes / 60;
+          const current = scheduledHoursByCourse.get(session.courseId) || 0;
+          scheduledHoursByCourse.set(session.courseId, current + hours);
+        }
+        
+        const coursesWithUpdatedScheduledHours = recalculatedCourses.map(course => {
+          const oldScheduledHours = course.scheduledHours;
+          const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
+          if (oldScheduledHours !== newScheduledHours) {
+            console.log(`📊 Initial load - Course ${course.name}: scheduledHours ${oldScheduledHours}h → ${newScheduledHours}h`);
+          }
+          return {
+            ...course,
+            scheduledHours: newScheduledHours
+          };
+        });
+        
+        setCourses(coursesWithUpdatedScheduledHours);
         setScheduledSessions(sessions as ScheduledSession[]);
         setStudyProgram(program);
       } catch (e) {
@@ -1025,14 +1077,20 @@ function App() {
         // Find the course to calculate new values
         const targetCourse = courses.find(c => c.id === targetCourseId);
         if (targetCourse) {
-          const newCompletedHours = targetCourse.completedHours + feedback.completedHours;
+          // CRITICAL FIX: Only add hours if the session was NOT already marked completed
+          // This prevents duplicate hour counting when user marks same session multiple times
+          const wasAlreadyCompleted = feedbackSession.completed;
+          const hoursToAdd = wasAlreadyCompleted ? 0 : feedback.completedHours;
+          const newCompletedHours = targetCourse.completedHours + hoursToAdd;
           const newProgress = Math.min(Math.round((newCompletedHours / targetCourse.estimatedHours) * 100), 100);
           
           console.log(`📈 Updating course ${targetCourseId} completedHours on backend:`, {
             old: targetCourse.completedHours,
-            added: feedback.completedHours,
+            added: hoursToAdd,
             new: newCompletedHours,
-            progress: newProgress
+            progress: newProgress,
+            wasAlreadyCompleted,
+            idempotent: hoursToAdd === 0 ? '✅ No duplicate hours added' : '➕ Adding hours for first-time completion'
           });
           
           // Persist to backend using extended API (supports completedHours/progress)
@@ -1045,7 +1103,36 @@ function App() {
 
       // Now refresh from backend to get authoritative data while preserving Google-moved sessions
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
-      setCourses(freshCourses as Course[]);
+      
+      // CRITICAL FIX (v0.6.8): Recalculate scheduledHours to prevent stale values from backend
+      const now = new Date();
+      const scheduledHoursByCourse = new Map<string, number>();
+      
+      for (const session of freshSessions) {
+        if (!session.courseId) continue;
+        
+        // Parse session end time to determine if it's in the future
+        const sessionEndDateTime = new Date(`${session.date}T${session.endTime}`);
+        if (sessionEndDateTime <= now) continue; // Skip past sessions
+        
+        const hours = session.durationMinutes / 60;
+        const current = scheduledHoursByCourse.get(session.courseId) || 0;
+        scheduledHoursByCourse.set(session.courseId, current + hours);
+      }
+      
+      const coursesWithUpdatedHours = freshCourses.map(course => {
+        const oldScheduledHours = course.scheduledHours;
+        const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
+        if (oldScheduledHours !== newScheduledHours) {
+          console.log(`📊 Attendance update - Course ${course.name}: scheduledHours ${oldScheduledHours}h → ${newScheduledHours}h`);
+        }
+        return {
+          ...course,
+          scheduledHours: newScheduledHours
+        };
+      });
+      
+      setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(prev => mergeSessionsPreserveGoogle(prev, freshSessions as ScheduledSession[]));
 
       // Handle milestones (these are not automatically persisted yet, so keep optimistic UI)
@@ -1539,20 +1626,32 @@ function App() {
       });
       
       // Recalculate scheduledHours for all courses (only count FUTURE sessions)
-      const today = new Date().toISOString().split('T')[0];
+      const now = new Date();
       const scheduledHoursByCourse = new Map<string, number>();
       
       for (const session of freshSessions) {
-        if (!session.courseId || session.date < today) continue;
+        if (!session.courseId) continue;
+        
+        // Parse session end time to determine if it's in the future
+        const sessionEndDateTime = new Date(`${session.date}T${session.endTime}`);
+        if (sessionEndDateTime <= now) continue; // Skip past sessions
+        
         const hours = session.durationMinutes / 60;
         const current = scheduledHoursByCourse.get(session.courseId) || 0;
         scheduledHoursByCourse.set(session.courseId, current + hours);
       }
       
-      const coursesWithUpdatedHours = freshCourses.map(course => ({
-        ...course,
-        scheduledHours: scheduledHoursByCourse.get(course.id) || 0
-      }));
+      const coursesWithUpdatedHours = freshCourses.map(course => {
+        const oldScheduledHours = course.scheduledHours;
+        const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
+        if (oldScheduledHours !== newScheduledHours) {
+          console.log(`📊 Course ${course.name}: scheduledHours ${oldScheduledHours}h → ${newScheduledHours}h`);
+        }
+        return {
+          ...course,
+          scheduledHours: newScheduledHours
+        };
+      });
       
       console.log('💾 SETTING STATE: About to update React state with fresh sessions');
       console.log('🔍 STATE UPDATE VERIFICATION:', {
@@ -1567,14 +1666,16 @@ function App() {
       setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
       
-      // Auto-activate course ONLY if there is a PAST session (date < today) assigned to it
+      // Auto-activate course ONLY if there is a PAST session (end time < now) assigned to it
       // Course remains 'planned' until studying actually starts (past session exists)
       if (sessionData.courseId) {
         const course = coursesWithUpdatedHours.find(c => c.id === sessionData.courseId);
         if (course && course.status === 'planned') {
-          const hasPastSession = freshSessions.some(
-            s => s.courseId === course.id && s.date < today
-          );
+          const hasPastSession = freshSessions.some(s => {
+            if (s.courseId !== course.id) return false;
+            const sessionEndDateTime = new Date(`${s.date}T${s.endTime}`);
+            return sessionEndDateTime <= now;
+          });
           
           if (hasPastSession) {
             // Transition: planned → active (studying has started)
@@ -1856,21 +1957,14 @@ function App() {
             sessionById.set(id, currentSession);
             hasChangesDuringSync = true; // Mark for re-sync
           } else {
-            // Use synced version BUT preserve local-only fields that don't sync to Google Calendar
-            // CRITICAL: Google Calendar doesn't store: completed, completionPercentage
-            // These are app-only fields for attendance tracking
-            const merged = {
-              ...syncedSession,
-              // Preserve attendance tracking (not in Google Calendar)
-              completed: currentSession.completed,
-              completionPercentage: currentSession.completionPercentage,
-            };
-            console.log(`✅ Using synced version of ${id} (preserving local attendance data)`, {
-              synced: { mod: new Date(syncedMod).toISOString(), googleEventId: syncedSession.googleEventId, courseId: syncedSession.courseId },
-              local: { mod: new Date(currentMod).toISOString(), googleEventId: currentSession.googleEventId, completed: currentSession.completed, courseId: currentSession.courseId },
-              merged: { completed: merged.completed, completionPercentage: merged.completionPercentage, courseId: merged.courseId }
+            // CRITICAL FIX: Use synced/backend version which has authoritative attendance data
+            // The backend is the source of truth for completed/completionPercentage
+            // These fields ARE persisted to database and should be fetched from backend
+            console.log(`✅ Using synced/backend version of ${id} (attendance data from database)`, {
+              synced: { mod: new Date(syncedMod).toISOString(), googleEventId: syncedSession.googleEventId, completed: syncedSession.completed, completionPercentage: syncedSession.completionPercentage, courseId: syncedSession.courseId },
+              local: { mod: new Date(currentMod).toISOString(), googleEventId: currentSession.googleEventId, completed: currentSession.completed, completionPercentage: currentSession.completionPercentage, courseId: currentSession.courseId }
             });
-            sessionById.set(id, merged);
+            sessionById.set(id, syncedSession); // Use backend data as-is
           }
         } else {
           // Session only in current state (not in sync result)

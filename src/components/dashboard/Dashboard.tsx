@@ -46,11 +46,27 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
     return activeCourseIds.has(session.courseId);
   });
   
-  // Calculate total scheduled (planned) hours from sessions to ensure unassigned future slots count
+  // Calculate total scheduled (planned) hours from course.scheduledHours (source of truth)
+  // CRITICAL FIX (v0.6.5): Use course.scheduledHours instead of recalculating from sessions
+  // This prevents progress bar jumping when sessions are created/deleted, since course.scheduledHours
+  // is updated atomically with session changes in App.tsx
+  const scheduledHoursFromCourses = activeCourses.reduce((sum, c) => sum + c.scheduledHours, 0);
+  
+  // CRITICAL FIX (v0.6.6): Add unassigned future sessions to overall progress
+  // Unassigned sessions (blockers/planned time) should count toward total scheduled hours
   const today = new Date().toISOString().split('T')[0];
-  const scheduledHours = scheduledSessions
-    .filter(s => !s.completed && s.date >= today)
+  const unassignedFutureHours = scheduledSessions
+    .filter(s => !s.courseId && !s.completed && s.date >= today)
     .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
+  
+  const scheduledHours = scheduledHoursFromCourses + unassignedFutureHours;
+  
+  console.log('📊 Dashboard scheduledHours calculation:', {
+    totalScheduledHours: scheduledHours,
+    fromCourses: scheduledHoursFromCourses,
+    fromUnassigned: unassignedFutureHours,
+    perCourse: activeCourses.map(c => ({ name: c.name, scheduledHours: c.scheduledHours }))
+  });
   
   // Calculate total completed hours from all courses (not just finished courses)
   const completedHoursFromCourses = courses
