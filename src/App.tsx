@@ -90,6 +90,84 @@ function App() {
   const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null); // Original missed session
   const [replanHandled, setReplanHandled] = useState(false);                 // Flag to prevent duplicate replan prompts
   
+  // Merge helper to preserve local Google-moved sessions when backend data lags
+  const mergeSessionsPreserveGoogle = (
+    localSessions: ScheduledSession[],
+    incomingSessions: ScheduledSession[],
+    protectIds: Set<string> = new Set()
+  ): ScheduledSession[] => {
+    const localById = new Map(localSessions.map(s => [s.id, s]));
+    const incomingById = new Map(incomingSessions.map(s => [s.id, s]));
+
+    const merged = incomingSessions.map(incoming => {
+      const local = localById.get(incoming.id);
+      if (!local) return incoming;
+
+      const isProtected = protectIds.has(incoming.id);
+      const localLast = local.lastModified ?? 0;
+      const incomingLast = incoming.lastModified ?? 0;
+
+      // Keep Google-linked sessions (or protected ones) at their local position when local is as new or newer
+      if (isProtected || local.googleEventId) {
+        const latest = Math.max(localLast, incomingLast, Date.now());
+        console.log('🔄 merge: keeping local Google/target session', {
+          id: incoming.id,
+          isProtected,
+          localLast,
+          incomingLast,
+          chosenLast: latest,
+          localDate: `${local.date} ${local.startTime}-${local.endTime}`,
+          incomingDate: `${incoming.date} ${incoming.startTime}-${incoming.endTime}`,
+        });
+        return {
+          ...incoming,
+          ...local,
+          date: local.date,
+          startTime: local.startTime,
+          endTime: local.endTime,
+          endDate: local.endDate,
+          googleEventId: local.googleEventId ?? incoming.googleEventId,
+          lastModified: latest,
+        };
+      }
+
+      // If local is fresher overall, prefer it (but keep incoming google ids if local missing)
+      if (localLast > incomingLast) {
+        console.log('🔄 merge: preferring fresher local session', {
+          id: incoming.id,
+          localLast,
+          incomingLast,
+          localDate: `${local.date} ${local.startTime}-${local.endTime}`,
+          incomingDate: `${incoming.date} ${incoming.startTime}-${incoming.endTime}`,
+        });
+        return {
+          ...incoming,
+          ...local,
+          googleEventId: local.googleEventId ?? incoming.googleEventId,
+          googleCalendarId: local.googleCalendarId ?? incoming.googleCalendarId,
+        };
+      }
+
+      console.log('🔄 merge: using incoming session', {
+        id: incoming.id,
+        localLast,
+        incomingLast,
+        localDate: `${local.date} ${local.startTime}-${local.endTime}`,
+        incomingDate: `${incoming.date} ${incoming.startTime}-${incoming.endTime}`,
+      });
+      return incoming;
+    });
+
+    // Preserve local-only sessions that aren't in the incoming set
+    for (const local of localSessions) {
+      if (!incomingById.has(local.id)) {
+        merged.push(local);
+      }
+    }
+
+    return merged;
+  };
+
   // ============================================================================
   // STUDY PROGRAM STATE - Degree progress tracking
   // ============================================================================
@@ -965,10 +1043,10 @@ function App() {
         }
       }
 
-      // Now refresh from backend to get authoritative data
+      // Now refresh from backend to get authoritative data while preserving Google-moved sessions
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       setCourses(freshCourses as Course[]);
-      setScheduledSessions(freshSessions as ScheduledSession[]);
+      setScheduledSessions(prev => mergeSessionsPreserveGoogle(prev, freshSessions as ScheduledSession[]));
 
       // Handle milestones (these are not automatically persisted yet, so keep optimistic UI)
       if (targetCourseId && (feedback.newMilestones?.length || feedback.completedMilestones?.length)) {
@@ -1220,10 +1298,10 @@ function App() {
         scheduledHours: Math.max(0, course.scheduledHours - sessionHours),
       });
 
-      // Refresh data from backend
+      // Refresh data from backend and merge to preserve Google-moved sessions
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       setCourses(freshCourses as Course[]);
-      setScheduledSessions(freshSessions as ScheduledSession[]);
+      setScheduledSessions(prev => mergeSessionsPreserveGoogle(prev, freshSessions as ScheduledSession[]));
     } catch (error) {
       // Handle 404 as benign (session already deleted/processed)
       if (error instanceof Error && error.message.includes('Session not found')) {
@@ -1290,6 +1368,8 @@ function App() {
             durationMinutes: target.durationMinutes,
             notes: target.notes,
             endDate: target.endDate,
+            googleEventId: target.googleEventId,
+            googleCalendarId: target.googleCalendarId,
           });
           console.log('?o. Target session updated & assigned:', target.id);
         } catch (updErr) {
@@ -1303,7 +1383,13 @@ function App() {
       try {
         const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
         setCourses(freshCourses as Course[]);
-        setScheduledSessions(freshSessions as ScheduledSession[]);
+
+        // Merge backend snapshot with latest in-memory state to avoid clobbering Google-moved sessions.
+        setScheduledSessions(prevSessions => mergeSessionsPreserveGoogle(
+          prevSessions,
+          freshSessions as ScheduledSession[],
+          new Set(targets.map(t => t.id)) // protect replan targets from being reverted
+        ));
         console.log('Replan backend refresh complete');
       } catch (refreshErr) {
         console.error('Replan refresh failed; applying local fallback', refreshErr);
@@ -1411,6 +1497,11 @@ function App() {
           notes: sessionData.notes,
           // Forward recurrence pattern if session is recurring
           ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
+          // Preserve Google Calendar sync field during updates to prevent clearing it
+          // This prevents the "flash" bug where sessions jump to old positions before sync completes
+          // Without this, the googleEventId gets cleared from DB, causing merge logic to choose
+          // the remote version with old dates, creating a visual flash until sync completes
+          googleEventId: editingSession.googleEventId,
         });
       } else {
         await apiCreateSession({
@@ -1431,7 +1522,21 @@ function App() {
       }
       
       // Refresh data from backend to ensure consistency
+      console.log('📡 BACKEND FETCH: Requesting fresh sessions from API...');
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+      console.log('📥 BACKEND RESPONSE:', {
+        totalSessions: freshSessions.length,
+        samplesWithGoogleEventId: freshSessions.filter(s => s.googleEventId).slice(0, 3).map(s => ({
+          id: s.id.substring(0, 20),
+          googleEventId: s.googleEventId?.substring(0, 20) + '...'
+        })),
+        samplesWithoutGoogleEventId: freshSessions.filter(s => !s.googleEventId).slice(0, 3).map(s => ({
+          id: s.id.substring(0, 20),
+          date: s.date
+        })),
+        totalWithGoogleEventId: freshSessions.filter(s => s.googleEventId).length,
+        totalWithoutGoogleEventId: freshSessions.filter(s => !s.googleEventId).length
+      });
       
       // Recalculate scheduledHours for all courses (only count FUTURE sessions)
       const today = new Date().toISOString().split('T')[0];
@@ -1449,6 +1554,16 @@ function App() {
         scheduledHours: scheduledHoursByCourse.get(course.id) || 0
       }));
       
+      console.log('💾 SETTING STATE: About to update React state with fresh sessions');
+      console.log('🔍 STATE UPDATE VERIFICATION:', {
+        totalSessions: freshSessions.length,
+        withGoogleEventId: freshSessions.filter(s => s.googleEventId).length,
+        withoutGoogleEventId: freshSessions.filter(s => !s.googleEventId).length,
+        sampleWithId: freshSessions.find(s => s.googleEventId) ? {
+          id: freshSessions.find(s => s.googleEventId)!.id.substring(0, 20),
+          googleEventId: freshSessions.find(s => s.googleEventId)!.googleEventId?.substring(0, 20)
+        } : 'NONE'
+      });
       setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
       
@@ -1661,6 +1776,12 @@ function App() {
     
     console.log('📥 App: Importing sessions from Google Calendar:', importedSessions.length);
     
+    // Stamp imported sessions so they are considered fresher than any older backend snapshot
+    const stampedImported = importedSessions.map(s => ({
+      ...s,
+      lastModified: now,
+    }));
+    
     // Track if any changes were made during sync (need to re-sync)
     let hasChangesDuringSync = false;
     
@@ -1673,12 +1794,12 @@ function App() {
       console.log('  Current session IDs:', currentSessions.map(s => `${s.id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`).join(' | '));
       console.log('  Current recurring masters:', currentSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
       console.log('  Current expanded instances:', currentSessions.filter(s => s.recurringEventId && !s.recurrence).map(s => ({ id: s.id, masterId: s.recurringEventId })));
-      console.log('  Synced sessions from Google:', importedSessions.length);
-      console.log('  Synced session IDs:', importedSessions.map(s => `${s.id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`).join(' | '));
-      console.log('  Synced recurring masters:', importedSessions.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
+      console.log('  Synced sessions from Google:', stampedImported.length);
+      console.log('  Synced session IDs:', stampedImported.map(s => `${s.id} (date:${s.date}, googleEventId:${s.googleEventId || 'none'})`).join(' | '));
+      console.log('  Synced recurring masters:', stampedImported.filter(s => s.recurrence).map(s => ({ id: s.id, rrule: s.recurrence?.rrule })));
       
       // Build maps for efficient lookup
-      const syncedById = new Map(importedSessions.map(s => [s.id, s]));
+      const syncedById = new Map(stampedImported.map(s => [s.id, s]));
       const currentById = new Map(currentSessions.map(s => [s.id, s]));
       
       console.log('🔍 MERGE ANALYSIS:');
@@ -1706,7 +1827,7 @@ function App() {
       const sessionById = new Map<string, ScheduledSession>();
       
       // First, add all synced sessions (authoritative - this is the merged state from server)
-      for (const syncedSession of importedSessions) {
+      for (const syncedSession of stampedImported) {
         sessionById.set(syncedSession.id, syncedSession);
       }
       
@@ -1824,6 +1945,41 @@ function App() {
       
       return finalSessions;
     });
+    
+    // CRITICAL FIX: Save updated sessions (with googleEventId) back to database
+    // This ensures googleEventId persists across restarts
+    console.log('💾 Saving merged sessions back to database to persist googleEventIds...');
+    const sessionsWithGoogleEventId = stampedImported.filter(s => s.googleEventId);
+    if (sessionsWithGoogleEventId.length > 0) {
+      console.log(`  Updating ${sessionsWithGoogleEventId.length} sessions with googleEventId in database...`);
+      Promise.all(
+        sessionsWithGoogleEventId.map(async (session) => {
+          try {
+            await apiUpdateSession(session.id, {
+              courseId: session.courseId,
+              studyBlockId: session.studyBlockId || '',
+              date: session.date,
+              startTime: session.startTime,
+              endDate: session.endDate,
+              endTime: session.endTime,
+              durationMinutes: session.durationMinutes,
+              completed: session.completed,
+              completionPercentage: session.completionPercentage,
+              notes: session.notes,
+              googleEventId: session.googleEventId, // CRITICAL: Save to database
+              googleCalendarId: session.googleCalendarId,
+            });
+            console.log(`    ✅ Saved ${session.id} with googleEventId: ${session.googleEventId?.substring(0, 20)}...`);
+          } catch (error) {
+            console.error(`    ❌ Failed to save ${session.id}:`, error);
+          }
+        })
+      ).then(() => {
+        console.log('✅ All merged sessions saved to database');
+      }).catch((error) => {
+        console.error('❌ Error saving merged sessions:', error);
+      });
+    }
     
       // If changes were made during sync, trigger another sync immediately
       if (hasChangesDuringSync) {
@@ -2347,6 +2503,7 @@ function App() {
 }
 
 export default App;
+
 
 
 

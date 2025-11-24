@@ -57,14 +57,34 @@ router.get('/', (req: AuthRequest, res) => {
       SELECT * FROM scheduled_sessions WHERE user_id = ? ORDER BY date DESC
     `).all(req.user!.userId);
 
-    // Add recurrence patterns
+    // Add recurrence patterns and convert snake_case to camelCase
     const sessionsWithRecurrence = sessions.map((session: any) => {
       const recurrence = dbWrapper.prepare('SELECT * FROM recurrence_patterns WHERE session_id = ?').get(session.id) as any;
+      
+      // Convert snake_case columns to camelCase for frontend
+      const mappedSession = {
+        id: session.id,
+        userId: session.user_id,
+        courseId: session.course_id,
+        studyBlockId: session.study_block_id,
+        date: session.date,
+        startTime: session.start_time,
+        endDate: session.end_date,
+        endTime: session.end_time,
+        durationMinutes: session.duration_minutes,
+        completed: session.completed === 1,
+        completionPercentage: session.completion_percentage,
+        notes: session.notes,
+        googleEventId: session.google_event_id,
+        googleCalendarId: session.google_calendar_id,
+        recurringEventId: session.recurring_event_id,
+        isRecurrenceException: session.is_recurrence_exception === 1,
+        lastModified: session.last_modified,
+      };
+      
       if (recurrence) {
         return {
-          ...session,
-          completed: session.completed === 1,
-          isRecurrenceException: session.is_recurrence_exception === 1,
+          ...mappedSession,
           recurrence: {
             rrule: recurrence.rrule,
             dtstart: recurrence.dtstart,
@@ -74,11 +94,7 @@ router.get('/', (req: AuthRequest, res) => {
           },
         };
       }
-      return {
-        ...session,
-        completed: session.completed === 1,
-        isRecurrenceException: session.is_recurrence_exception === 1,
-      };
+      return mappedSession;
     });
 
     res.json(sessionsWithRecurrence);

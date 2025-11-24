@@ -333,8 +333,20 @@ export interface CreateSessionData {
 }
 
 export async function getSessions(): Promise<Session[]> {
+  console.log('🌐 API CLIENT: Fetching /sessions from backend...');
   const raw = await fetchAPI<Array<Record<string, unknown>>>('/sessions');
-  return raw.map((s): Session => {
+  console.log('🌐 API CLIENT: Raw response received:', {
+    totalSessions: raw.length,
+    sampleSession: raw[0] ? {
+      id: (raw[0].id as string)?.substring(0, 20),
+      has_google_event_id_snake: !!raw[0].google_event_id,
+      has_googleEventId_camel: !!raw[0].googleEventId,
+      google_event_id_value: raw[0].google_event_id ? (raw[0].google_event_id as string).substring(0, 20) : 'NONE',
+      googleEventId_value: raw[0].googleEventId ? (raw[0].googleEventId as string).substring(0, 20) : 'NONE'
+    } : 'NO_SESSIONS'
+  });
+  
+  const mapped = raw.map((s): Session => {
     const rec = s.recurrence as Record<string, unknown> | undefined;
     return {
       id: s.id as string,
@@ -364,6 +376,17 @@ export async function getSessions(): Promise<Session[]> {
         : undefined,
     };
   });
+  
+  console.log('🌐 API CLIENT: Mapped sessions:', {
+    totalMapped: mapped.length,
+    withGoogleEventId: mapped.filter(s => s.googleEventId).length,
+    withoutGoogleEventId: mapped.filter(s => !s.googleEventId).length,
+    sampleMapped: mapped[0] ? {
+      id: mapped[0].id.substring(0, 20),
+      googleEventId: mapped[0].googleEventId ? mapped[0].googleEventId.substring(0, 20) : 'NONE'
+    } : 'NO_SESSIONS'
+  });
+  return mapped;
 }
 
 export async function createSession(data: CreateSessionData): Promise<Session> {

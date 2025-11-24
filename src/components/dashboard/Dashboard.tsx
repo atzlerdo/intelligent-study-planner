@@ -46,17 +46,11 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
     return activeCourseIds.has(session.courseId);
   });
   
-  // Calculate totals
-  const coursesScheduledHours = courses
-    .filter(c => c.status === 'active' || c.status === 'planned')
-    .reduce((sum, c) => sum + c.scheduledHours, 0);
-  
-  // Add unassigned session hours to the total
-  const unassignedHours = scheduledSessions
-    .filter(s => !s.courseId && !s.completed)
+  // Calculate total scheduled (planned) hours from sessions to ensure unassigned future slots count
+  const today = new Date().toISOString().split('T')[0];
+  const scheduledHours = scheduledSessions
+    .filter(s => !s.completed && s.date >= today)
     .reduce((sum, s) => sum + (s.durationMinutes / 60), 0);
-  
-  const scheduledHours = coursesScheduledHours + unassignedHours;
   
   // Calculate total completed hours from all courses (not just finished courses)
   const completedHoursFromCourses = courses
