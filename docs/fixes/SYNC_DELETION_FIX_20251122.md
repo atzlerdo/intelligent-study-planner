@@ -4,7 +4,7 @@
 
 **Issue:** When deleting sessions in Google Calendar, they were getting re-synced back to Google Calendar (appearing multiple times) instead of being permanently deleted from the app.
 
-**User Report:** "If I delete sessions in the Google calendar. They are not going to be deleted in the App anymore. I've tried deleting the session on 24. 25. and 26.11. They get resynced back to google calendar and are visible there multiple times."
+## User-Reported Issue "If I delete sessions in the Google calendar. They are not going to be deleted in the App anymore. I've tried deleting the session on 24. 25. and 26.11. They get resynced back to google calendar and are visible there multiple times."
 
 ## Root Cause Analysis
 

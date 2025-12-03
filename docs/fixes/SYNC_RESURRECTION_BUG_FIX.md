@@ -1,6 +1,6 @@
 # Google Calendar Sync: Session Resurrection Bug Fix
 
-## Problem Summary
+## Problem Description
 Sessions deleted from the app were reappearing after subsequent syncs, creating a "zombie session" effect. This occurred specifically when:
 1. Session A created in app → synced to Google Calendar
 2. Session A deleted from app
@@ -65,7 +65,7 @@ The grace period works for **preventing re-import during the same sync cycle**, 
 3. Next sync queries database → includes the "deleted" session
 4. No `googleEventId` check → session resurrects
 
-## The Fix
+## Solution Implementation
 
 ### Code Changes (App.tsx, line ~1489)
 

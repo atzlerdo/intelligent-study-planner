@@ -1,8 +1,8 @@
 # Session Duplicate Sync Fix (2024-11-22)
 
-## Problem Summary
+## Problem Description
 
-**User Report:**
+## User-Reported Issue
 > "I have deleted the google calender and reconnected it. There still have been synced some sessions doubled (25. and 26.11.)"
 
 ### Observed Behavior

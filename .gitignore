@@ -15,6 +15,22 @@ dist
 dist-ssr
 *.local
 
+# Environment variables (CRITICAL - DO NOT COMMIT)
+.env
+.env.local
+.env.*.local
+server/.env
+server/.env.local
+
+# Database files (contains user data)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+server/data/*.db
+server/data/*.sqlite
+server/data/*.sqlite3
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -22,6 +38,7 @@ dist-ssr
 .DS_Store
 *.suo
 *.ntvs*
+.vs/
 *.njsproj
 *.sln
 *.sw?

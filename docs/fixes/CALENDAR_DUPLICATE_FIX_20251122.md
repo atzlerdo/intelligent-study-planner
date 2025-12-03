@@ -1,8 +1,8 @@
 # Calendar Duplicate Creation Fix (2024-11-22)
 
-## Problem Summary
+## Problem Description
 
-**User Report:**
+## User-Reported Issue
 > "If i delete the calender from the google calender and connect the app with my google calendar i get asked if i want to merge to an existing calender. But in the beginning there whould be none."
 
 ### Observed Behavior

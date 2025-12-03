@@ -46,7 +46,7 @@ The issue was that "skipping" didn't actually remove the session - it just didn'
 
 ## Solution Implemented
 
-### Fix 1: Proper Session Removal in App State
+### Solution 1: Proper Session Removal in App State
 
 **Modified** `src/App.tsx` - `handleSessionsImported()` function:
 
@@ -93,7 +93,7 @@ for (const [id, currentSession] of currentById) {
 
 **Key improvement**: Now when a session exists locally but not in the sync result (and wasn't created during sync), it's **explicitly NOT added** to the final map, effectively deleting it.
 
-### Fix 2: Mark Deleted Sessions During Grace Period
+### Solution 2: Mark Deleted Sessions During Grace Period
 
 **Modified** `src/App.tsx` - `handleDeleteSession()` function:
 

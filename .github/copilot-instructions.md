@@ -1,89 +1,56 @@
 # Intelligent Study Planner - AI Coding Agent Instructions
 
 ## Project Overview
-A full-stack React + TypeScript + Vite study planning app for managing university courses (180 ECTS Bachelor's program). Features JWT authentication, SQLite database backend, and Google Calendar integration for comprehensive study session management.
+Full-stack study planning app for 180 ECTS Bachelor's program with JWT auth, SQLite backend, and Google Calendar two-way sync. 
 
-## Architecture
+**Current version:** v0.6.9 (active development - see `CHANGELOG.md` for recent critical fixes)
+
+## Architecture Overview
 
 ### Tech Stack
-**Frontend:**
-- React 18 + TypeScript + Vite
-- Tailwind CSS + shadcn/ui components
-- @react-oauth/google for Google Calendar OAuth
-- lucide-react for icons
+**Frontend:** React 18 + TypeScript + Vite + Tailwind CSS + shadcn/ui + @react-oauth/google  
+**Backend:** Node.js + Express + SQLite (sql.js) + JWT + bcryptjs + Zod validation  
+**Build:** Vite (dev: port 5173), ESLint flat config, TypeScript strict mode
 
-**Backend:**
-- Node.js + Express
-- SQLite (via sql.js) for data persistence
-- JWT authentication (jsonwebtoken + bcryptjs)
-- Zod for API validation
+### State Architecture (CRITICAL)
+**Single source of truth:** `App.tsx` manages ALL global state via `useState`  
+**Data flow:** User action → API call → Backend DB → State update → Re-render  
+**Auth:** JWT in localStorage (`authToken`), validated on EVERY API request, user-isolated queries  
+**Backend:** `server/src/db.ts` schema (users, courses, scheduled_sessions, google_calendar_tokens)  
+**Foreign keys:** ALL tables have `user_id` FK with CASCADE delete, enforced via `PRAGMA foreign_keys = ON`
 
-**Development:**
-- ESLint (flat config)
-- TypeScript (strict mode)
-- Vite dev server with HMR
+### Progress Tracking System (MOST COMMON BUG SOURCE)
+**Three-segment bars:** Completed (green) | Scheduled (yellow) | Remaining (gray)
 
-### State Management
-- **Single-source-of-truth**: `App.tsx` manages all global state via React hooks (`useState`)
-- **Persistence**: All data stored in SQLite database via Express REST API
-- **Authentication**: JWT tokens stored in localStorage, validated on every API request
-- **Data flow**: Parent state → API calls → Database → State updates
-- **User isolation**: All data queries filtered by authenticated user's ID
+**CRITICAL CALCULATION RULES** (see v0.6.5-v0.6.9 fixes in `CHANGELOG.md`):
+1. `scheduledHours` = sum of **future incomplete sessions ONLY** (`date+endTime > now`)
+2. `completedHours` = sum of **attended sessions** (NOT from backend - recalculate on load!)
+3. Calculate at 3 points: initial load, session create/edit/delete, attendance tracking
+4. Use `course.scheduledHours` as single source (NEVER recalculate in Dashboard)
+5. Past sessions created retroactively must NEVER appear in scheduled hours
 
-### Database Schema (`server/src/db.ts`)
-**Primary Tables:**
-- `users` - Authentication (email, password_hash, JWT)
-- `courses` - Course data with lifecycle (planned → active → completed)
-- `scheduled_sessions` - Study sessions with Google Calendar sync fields
-- `study_blocks` - Recurring weekly time slots
-- `study_programs` - Degree configuration (ECTS, hours per ECTS)
-- `google_calendar_tokens` - OAuth tokens (user-specific)
-- `recurrence_patterns` - RRULE data for recurring sessions
-- `milestones` - Course sub-tasks
+**Common mistakes:**
+- Using date-only comparison (`session.date >= today`) → fails for past sessions on current day
+- Trusting backend `scheduledHours` values → can be stale, always recalculate
+- Recalculating scheduled hours in multiple places → causes race conditions
 
-**Key Relationships:**
-- All tables have `user_id` foreign key (CASCADE delete on user removal)
-- `courses.user_id` → `users.id`
-- `sessions.course_id` → `courses.id` (SET NULL for unassigned sessions)
-- Foreign keys enforced via `PRAGMA foreign_keys = ON`
-
-### Core Domain Models (`src/types/index.ts`)
+### Domain Models (`src/types/index.ts`)
 ```typescript
-Course {
-  id: string                  // UUID
-  userId: string              // Foreign key
-  status: 'planned' | 'active' | 'completed'  // Lifecycle
-  scheduledHours: number      // Sum of session durations
-  completedHours: number      // Tracked via SessionFeedbackDialog
-  progress: number            // 0-100 percentage
-  semester: number            // 1-6 for Bachelor program
-  ects: number                // Credit points
-  estimatedHours: number      // ects × hoursPerECTS
-}
-
-ScheduledSession {
-  id: string                  // UUID
-  userId: string              // Foreign key
-  courseId: string | null     // null for unassigned/break sessions
-  completed: boolean          // Attendance tracking
-  completionPercentage: number // Self-assessment (0-100)
-  endDate?: string            // Multi-day support
-  googleEventId?: string      // For sync tracking
-  recurringEventId?: string   // Link to parent recurring event
-}
+Course: status ('planned' → 'active' → 'completed'), scheduledHours, completedHours, progress%
+ScheduledSession: courseId (null = unassigned), completed, googleEventId (for sync), endDate (multi-day)
 ```
+**Course lifecycle:** Auto-activates on first session creation, deactivates when all sessions deleted
 
-### Component Organization
-- `components/ui/` - shadcn/ui primitives (button, dialog, card, etc.)
-- `components/sessions/`, `components/courses/`, `components/dashboard/` - feature modules
-- `components/layout/` - navigation and layout containers
-- `WeekCalendar.tsx`, `CalendarView.tsx` - calendar views with drag-and-drop session editing
+### Component Structure
+- `src/components/ui/` - shadcn/ui primitives (Radix UI + CVA variants)
+- `src/components/{sessions,courses,dashboard}/` - Feature modules
+- `App.tsx` - 2600+ lines, manages ALL state and dialogs (attendance, feedback, replan)
+- NO `@/` alias - use relative imports (`./ui/button`)
 
 ### Scheduling System (`src/lib/scheduler.ts`)
-- **Auto-scheduling**: `generateSchedule()` distributes course hours across `StudyBlock[]` (recurring weekly time slots)
-- **Manual scheduling**: Users create/edit `ScheduledSession` via drag-and-drop or dialogs
-- **Multi-day support**: Sessions can span days via `endDate` field (e.g., night shift studying)
-- **Duration calculation**: `calculateDuration()` handles same-day, over-midnight, and multi-day spans
+- **Auto**: `generateSchedule()` fills `StudyBlock[]` (weekly recurring slots)
+- **Manual**: Drag-and-drop in `WeekCalendar.tsx` / `CalendarView.tsx`
+- **Multi-day**: `endDate` field for overnight sessions, `calculateDuration()` handles cross-midnight logic
 
 ## Critical Workflows
 

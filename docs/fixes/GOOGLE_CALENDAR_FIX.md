@@ -1,6 +1,6 @@
 # Google Calendar Duplication Bug Fixes
 
-## Problem Summary
+## Problem Description
 
 After connecting Google Calendar, users experienced:
 1. **Session Triplication**: Each session appeared 3 times in the app
@@ -28,9 +28,9 @@ After connecting Google Calendar, users experienced:
 - **Impact**: Same sessions imported multiple times added to state without checks
 - **Result**: Triplication of sessions in the UI
 
-## Implemented Fixes
+## Solution Implementation
 
-### Fix 1: Sync Concurrency Guard
+### Solution 1: Sync Concurrency Guard
 **File**: `src/components/GoogleCalendarSyncService.tsx`
 
 ```typescript
@@ -70,7 +70,7 @@ const handleSync = async () => {
 - Ref updates are immediate
 - Double protection prevents race conditions in StrictMode
 
-### Fix 2: Calendar ID Persistence
+### Solution 2: Calendar ID Persistence
 **File**: `src/lib/googleCalendar.ts`
 
 ```typescript
@@ -110,7 +110,7 @@ async function getOrCreateStudyCalendar(accessToken: string): Promise<string> {
 - Prevents duplicate calendar creation during concurrent calls
 - Fast lookup without API call on subsequent syncs
 
-### Fix 3: Import Deduplication
+### Solution 3: Import Deduplication
 **File**: `src/App.tsx`
 
 ```typescript

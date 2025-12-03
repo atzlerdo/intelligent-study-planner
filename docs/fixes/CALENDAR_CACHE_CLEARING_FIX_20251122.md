@@ -1,8 +1,8 @@
 # Calendar Cache Clearing Fix (2024-11-22)
 
-## Problem Summary
+## Problem Description
 
-**User Report:**
+## User-Reported Issue
 > "After waiting a while i could find the new google calender in my google calendar. When disconnecting the calender and then conencting again the app does not find a calender neither (or has found a old calender which was already conencted i dont know how this works)"
 
 ### Observed Behavior
