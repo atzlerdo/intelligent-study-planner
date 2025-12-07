@@ -50,6 +50,10 @@
               - Dashboard, CoursesView, WeekCalendar, etc.
 ```
 
+      ### Main View vs Courses Overview (Visibility Rule)
+      - Dashboard ("Aktive Kurse"): shows only non-completed courses that have at least one scheduled session (past or future). Planned-only courses without sessions are not shown here.
+      - Courses Overview: lists all courses with their status badges (planned, active, completed) and is not filtered by session presence.
+
 ### Authentication Flow
 1. User registers/logs in ? Backend generates JWT token
 2. Token stored in `localStorage` as `authToken`
@@ -105,9 +109,9 @@ Session End Time Passes ? SessionAttendanceDialog appears
    ?
 Attended?
    +- Yes ? SessionFeedbackDialog (actual hours, progress %, milestones)
-   ¦         ? Update course.completedHours, course.progress
-   ¦         ? Mark session.completed = true
-   ¦
+   ï¿½         ? Update course.completedHours, course.progress
+   ï¿½         ? Mark session.completed = true
+   ï¿½
    +- No ? Choose:
             +- Delete session (no replan)
             +- Move to other free study sessions (automatic replan)
@@ -141,50 +145,50 @@ App Sessions --push--? Google Calendar
 ```
 intelligent-study-planner/
 +-- src/
-¦   +-- App.tsx                      ? Main app, all state management
-¦   +-- main.tsx                     ? Entry point, Google OAuth provider
-¦   +-- components/
-¦   ¦   +-- auth/AuthScreen.tsx      ? Login/Register UI
-¦   ¦   +-- dashboard/Dashboard.tsx  ? Statistics overview
-¦   ¦   +-- courses/
-¦   ¦   ¦   +-- CoursesView.tsx      ? Course list with progress bars
-¦   ¦   ¦   +-- CourseDialog.tsx     ? Add/Edit course form
-¦   ¦   +-- sessions/
-¦   ¦   ¦   +-- SessionDialog.tsx           ? Add/Edit session form
-¦   ¦   ¦   +-- SessionAttendanceDialog.tsx ? "Did you attend?" prompt
-¦   ¦   ¦   +-- SessionFeedbackDialog.tsx   ? Progress tracking form
-¦   ¦   +-- WeekCalendar.tsx         ? Drag-and-drop weekly view
-¦   ¦   +-- CalendarView.tsx         ? Month/week calendar switcher
-¦   ¦   +-- CalendarSync.tsx         ? Google Calendar connection UI
-¦   ¦   +-- GoogleCalendarSyncService.tsx ? Background sync logic
-¦   ¦   +-- ui/                      ? shadcn/ui primitives (button, dialog, etc.)
-¦   +-- lib/
-¦   ¦   +-- api.ts                   ? Backend API client (all CRUD operations)
-¦   ¦   +-- scheduler.ts             ? Auto-scheduling algorithms
-¦   ¦   +-- googleCalendar.ts        ? Google Calendar API integration
-¦   ¦   +-- hooks/
-¦   ¦       +-- useGoogleCalendarSync.ts ? OAuth hook
-¦   +-- types/index.ts               ? TypeScript interfaces
-¦   +-- styles/globals.css           ? Tailwind + CSS variables
-¦
+ï¿½   +-- App.tsx                      ? Main app, all state management
+ï¿½   +-- main.tsx                     ? Entry point, Google OAuth provider
+ï¿½   +-- components/
+ï¿½   ï¿½   +-- auth/AuthScreen.tsx      ? Login/Register UI
+ï¿½   ï¿½   +-- dashboard/Dashboard.tsx  ? Statistics overview
+ï¿½   ï¿½   +-- courses/
+ï¿½   ï¿½   ï¿½   +-- CoursesView.tsx      ? Course list with progress bars
+ï¿½   ï¿½   ï¿½   +-- CourseDialog.tsx     ? Add/Edit course form
+ï¿½   ï¿½   +-- sessions/
+ï¿½   ï¿½   ï¿½   +-- SessionDialog.tsx           ? Add/Edit session form
+ï¿½   ï¿½   ï¿½   +-- SessionAttendanceDialog.tsx ? "Did you attend?" prompt
+ï¿½   ï¿½   ï¿½   +-- SessionFeedbackDialog.tsx   ? Progress tracking form
+ï¿½   ï¿½   +-- WeekCalendar.tsx         ? Drag-and-drop weekly view
+ï¿½   ï¿½   +-- CalendarView.tsx         ? Month/week calendar switcher
+ï¿½   ï¿½   +-- CalendarSync.tsx         ? Google Calendar connection UI
+ï¿½   ï¿½   +-- GoogleCalendarSyncService.tsx ? Background sync logic
+ï¿½   ï¿½   +-- ui/                      ? shadcn/ui primitives (button, dialog, etc.)
+ï¿½   +-- lib/
+ï¿½   ï¿½   +-- api.ts                   ? Backend API client (all CRUD operations)
+ï¿½   ï¿½   +-- scheduler.ts             ? Auto-scheduling algorithms
+ï¿½   ï¿½   +-- googleCalendar.ts        ? Google Calendar API integration
+ï¿½   ï¿½   +-- hooks/
+ï¿½   ï¿½       +-- useGoogleCalendarSync.ts ? OAuth hook
+ï¿½   +-- types/index.ts               ? TypeScript interfaces
+ï¿½   +-- styles/globals.css           ? Tailwind + CSS variables
+ï¿½
 +-- server/
-¦   +-- src/
-¦   ¦   +-- index.ts                 ? Express app entry point
-¦   ¦   +-- db.ts                    ? Database initialization + schema
-¦   ¦   +-- auth.ts                  ? JWT middleware
-¦   ¦   +-- routes/
-¦   ¦       +-- auth.ts              ? /auth/register, /auth/login
-¦   ¦       +-- courses.ts           ? CRUD for courses
-¦   ¦       +-- sessions.ts          ? CRUD for sessions
-¦   ¦       +-- study-program.ts     ? Study program config
-¦   ¦       +-- google-calendar.ts   ? Token management
-¦   ¦       +-- admin.ts             ? User cleanup utilities
-¦   +-- data/study-planner.db        ? SQLite database file
-¦   +-- check-user.js                ? CLI: Check user data
-¦   +-- list-users.js                ? CLI: List all users
-¦   +-- delete-test-users.js         ? CLI: Cleanup test accounts
-¦   +-- show-all-data.js             ? CLI: Comprehensive data dump
-¦
+ï¿½   +-- src/
+ï¿½   ï¿½   +-- index.ts                 ? Express app entry point
+ï¿½   ï¿½   +-- db.ts                    ? Database initialization + schema
+ï¿½   ï¿½   +-- auth.ts                  ? JWT middleware
+ï¿½   ï¿½   +-- routes/
+ï¿½   ï¿½       +-- auth.ts              ? /auth/register, /auth/login
+ï¿½   ï¿½       +-- courses.ts           ? CRUD for courses
+ï¿½   ï¿½       +-- sessions.ts          ? CRUD for sessions
+ï¿½   ï¿½       +-- study-program.ts     ? Study program config
+ï¿½   ï¿½       +-- google-calendar.ts   ? Token management
+ï¿½   ï¿½       +-- admin.ts             ? User cleanup utilities
+ï¿½   +-- data/study-planner.db        ? SQLite database file
+ï¿½   +-- check-user.js                ? CLI: Check user data
+ï¿½   +-- list-users.js                ? CLI: List all users
+ï¿½   +-- delete-test-users.js         ? CLI: Cleanup test accounts
+ï¿½   +-- show-all-data.js             ? CLI: Comprehensive data dump
+ï¿½
 +-- .github/copilot-instructions.md  ? AI agent guide
 +-- CHANGELOG.md                     ? User-facing release notes
 +-- V0.6.0_RELEASE_NOTES.md          ? Technical v0.6.0 documentation
