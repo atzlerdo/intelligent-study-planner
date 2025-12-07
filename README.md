@@ -13,66 +13,69 @@ A full-stack study planning application for managing university courses with Goo
 
 ## Quick Start
 
-### 1. Setup Environment Variables
+### 1. Install Dependencies
 
-**Frontend:**
 ```bash
-# Copy the example file
-cp .env.example .env.local
-
-# Edit .env.local and add your Google OAuth credentials
-# Get them from: https://console.cloud.google.com/
-```
-
-**Backend:**
-```bash
-cd server
-# Copy the example file
-cp .env.example .env.local
-
-# Edit .env.local and set a strong JWT secret
-# Generate one with: openssl rand -base64 32
-```
-
-### 2. Install Dependencies
-
-**Frontend:**
-```bash
+# Install frontend dependencies
 npm install
-```
 
-**Backend:**
-```bash
+# Install backend dependencies
 cd server
 npm install
+cd ..
 ```
 
-### 3. Run Development Servers
+### 2. Start the Application
 
-**Frontend (port 5173):**
 ```bash
-npm run dev
-```
-
-**Backend (port 3001):**
-```bash
+# Start both servers (uses default configurations)
+npm run dev          # Frontend on http://localhost:5173
 cd server
-npm run dev
+npm run dev          # Backend on http://localhost:3001
 ```
 
-## Environment Variables
+### 3. Create Your Account
 
-### Frontend (.env.local)
-- `VITE_GOOGLE_CLIENT_ID` - Your Google OAuth 2.0 Client ID
-- `VITE_GOOGLE_API_KEY` - Your Google API Key
+1. Open http://localhost:5173 in your browser
+2. Click "Register" and create a new account
+3. Start planning your study schedule!
 
-### Backend (server/.env.local)
-- `PORT` - Server port (default: 3001)
-- `JWT_SECRET` - Secret key for JWT signing (MUST be changed from default)
-- `DATABASE_PATH` - Path to SQLite database file
-- `NODE_ENV` - Environment mode (development/production)
+The app works immediately with default settings. Google Calendar sync is **optional** - see below to set it up.
 
-⚠️ **IMPORTANT:** Never commit `.env.local` files! They contain your actual credentials.
+---
+
+## 🔗 Optional: Google Calendar Integration
+
+Want to sync your study sessions with Google Calendar? Follow these steps:
+
+### Prerequisites
+
+1. Create a Google Cloud Project at https://console.cloud.google.com/
+2. Enable the Google Calendar API
+3. Create OAuth 2.0 credentials:
+   - Application type: Web application
+   - Authorized JavaScript origins: `http://localhost:5173`
+   - Authorized redirect URIs: `http://localhost:5173`
+
+### Configuration
+
+**Frontend** - Create `.env.local`:
+```bash
+VITE_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+VITE_GOOGLE_API_KEY=your-google-api-key
+```
+
+**Backend** - Create `server/.env.local`:
+```bash
+PORT=3001
+JWT_SECRET=your-super-secret-jwt-key-change-this
+DATABASE_PATH=./data/study-planner.db
+NODE_ENV=development
+```
+
+For detailed setup instructions, see **[docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md)**.
+
+⚠️ **IMPORTANT:** Never commit `.env.local` files! They contain your credentials.
 
 ## 🛠️ Tech Stack
 
