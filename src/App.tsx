@@ -61,6 +61,7 @@ import { isAuthenticated, migrateIfEmpty, logout, createCourse as apiCreateCours
 import type { AuthResponse } from './lib/api';
 import { AuthScreen } from './components/auth/AuthScreen';
 import { calculateWeeklyAvailableMinutes, calculateEstimatedEndDate, calculateDuration } from './lib/scheduler';
+import type { RecurrencePattern } from './components/RecurrencePatternPicker';
 import { generateMockSessions } from './lib/mockSessions';
 
 function App() {
@@ -896,7 +897,7 @@ function App() {
   const [showBlockDialog, setShowBlockDialog] = useState(false);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
   const [pendingSessionDraft, setPendingSessionDraft] = useState<{
-    date: string; startTime: string; endTime: string; endDate?: string; recurring?: boolean; recurrencePattern?: any;
+    date: string; startTime: string; endTime: string; endDate?: string; recurring?: boolean; recurrencePattern?: RecurrencePattern | null;
   } | null>(null);
   const [pendingSelectCourseId, setPendingSelectCourseId] = useState<string | null>(null);
   const [editingCourse, setEditingCourse] = useState<Course | undefined>();
