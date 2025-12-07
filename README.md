@@ -11,6 +11,51 @@ A full-stack study planning application for managing university courses with Goo
 - **[Changelog](CHANGELOG.md)** - Version history and changes
 - **[Fix Documentation](docs/fixes/)** - Detailed bug fix reports
 
+## Prerequisites
+
+You need Node.js (includes npm) installed on your system.
+
+**Check if already installed:**
+```bash
+node --version
+npm --version
+```
+
+**If not installed, choose your method:**
+
+### Windows
+```powershell
+# Using winget (recommended)
+winget install OpenJS.NodeJS.LTS
+
+# Or download installer from:
+# https://nodejs.org/
+```
+
+### macOS
+```bash
+# Using Homebrew
+brew install node
+
+# Or download installer from:
+# https://nodejs.org/
+```
+
+### Linux
+```bash
+# Ubuntu/Debian
+sudo apt update
+sudo apt install nodejs npm
+
+# Fedora
+sudo dnf install nodejs npm
+
+# Arch Linux
+sudo pacman -S nodejs npm
+```
+
+After installation, **restart your terminal** and verify: `node --version`
+
 ## Quick Start
 
 ### 1. Install Dependencies
