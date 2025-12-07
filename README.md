@@ -56,6 +56,30 @@ sudo pacman -S nodejs npm
 
 After installation, **restart your terminal** and verify: `node --version`
 
+### Troubleshooting: "node is not recognized"
+
+If you get this error after installing Node.js:
+
+**Solution 1: Restart VS Code completely**
+- Close ALL VS Code windows
+- Reopen VS Code
+- Open a new terminal
+
+**Solution 2: Reload PATH in PowerShell (Windows)**
+```powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+node --version
+```
+
+**Solution 3: Check Node.js installation path**
+```bash
+# Windows: Should be in
+C:\Program Files\nodejs\
+
+# Verify it's in PATH:
+# Windows: Search "Environment Variables" → Edit PATH → Check if Node.js path exists
+```
+
 ## Quick Start
 
 ### 1. Install Dependencies
