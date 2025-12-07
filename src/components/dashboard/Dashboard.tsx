@@ -26,8 +26,12 @@ interface DashboardProps {
 }
 
 export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, onSessionsDeleted, autoSyncTrigger, /* previewSession unused with FullCalendar */ /* editingSessionId unused */ isDialogOpen }: DashboardProps) {
-  // Include both planned and active courses
-  const activeCourses = courses.filter(c => c.status === 'active' || c.status === 'planned');
+  // Show only courses that have at least one session (exclude completed)
+  const activeCourses = courses.filter(course => {
+    if (course.status === 'completed') return false;
+    const hasAnySession = scheduledSessions.some(s => s.courseId === course.id);
+    return hasAnySession;
+  });
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
 
 

@@ -19,8 +19,12 @@ interface DashboardProps {
 }
 
 export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove }: DashboardProps) {
-  // Filter for active AND planned courses (sessions can exist for planned courses with future dates)
-  const activeCourses = courses.filter(c => c.status === 'active' || c.status === 'planned');
+  // Active list should include non-completed courses that have at least one session
+  const activeCourses = courses.filter(course => {
+    if (course.status === 'completed') return false;
+    const hasAnySession = scheduledSessions.some(s => s.courseId === course.id);
+    return hasAnySession;
+  });
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
   // DEBUG: log course statuses and active ids
   console.log('DEBUG: Dashboard courses overview', {
@@ -30,7 +34,7 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
     activeIds: Array.from(activeCourseIds)
   });
   
-  // Get all sessions for active/planned courses + unassigned sessions (blockers)
+  // Get all sessions for active courses + unassigned sessions (blockers)
   const relevantSessions = scheduledSessions.filter(session => {
     if (!session.courseId) return true; // Include unassigned sessions
     return activeCourseIds.has(session.courseId);
@@ -51,9 +55,7 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
   }
   
   // Calculate totals
-  const scheduledHours = courses
-    .filter(c => c.status === 'active' || c.status === 'planned')
-    .reduce((sum, c) => sum + c.scheduledHours, 0);
+  const scheduledHours = activeCourses.reduce((sum, c) => sum + c.scheduledHours, 0);
 
   return (
     <div className="h-full overflow-hidden lg:overflow-hidden overflow-y-auto p-4">

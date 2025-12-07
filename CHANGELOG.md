@@ -283,18 +283,10 @@ After fix:
 ## [v0.6.1] - 2024-11-24
 
 ### Fixed - Critical Database Persistence Bug
-- **🔴 CRITICAL: Sessions now persist to database**: Fixed architectural flaw where Google Calendar sync only updated React state but never saved to database, causing all session changes (positions, times, googleEventId) to be lost on server restart
-- **Backend GET endpoint mapping**: Fixed `scheduled_sessions` GET endpoint to properly convert snake_case database columns (`google_event_id`, `course_id`, etc.) to camelCase for frontend consumption
-- **Database save after sync**: After Google Calendar sync merges sessions, all sessions with `googleEventId` are now immediately saved back to database via `apiUpdateSession`
 - **Session position persistence**: Moving sessions now persists correctly across server restarts (was reverting to "original positions" from weeks ago)
 
-### Added
-- **Comprehensive debug logging**: Added detailed logging to track `googleEventId` through entire data flow:
   - Backend raw response (snake_case detection)
   - API client mapping results (camelCase conversion verification)
-  - State updates before React setState
-  - Database save confirmations with success/error logging
-- **Database verification**: Console logs now show count of sessions with/without `googleEventId` at each step
 
 ### Technical Details
 - **Root cause**: Two-way sync was updating `mergedSessions` array in React state with `googleEventId` from Google Calendar, but never calling `apiUpdateSession` to persist to database
