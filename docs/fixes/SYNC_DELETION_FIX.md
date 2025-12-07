@@ -303,3 +303,4 @@ if (remote) {
 3. **Batch deletions**: Optimize deletion of multiple sessions at once
 4. **Conflict resolution UI**: Show dialog when deletion conflicts occur
 5. **Audit log**: Track all sync operations for debugging
+

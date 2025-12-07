@@ -268,3 +268,4 @@ After deploying these fixes, monitor for:
 - [ ] Sync success rate remains high
 - [ ] No new errors in console logs
 - [ ] Page load time not impacted (localStorage reads are fast)
+

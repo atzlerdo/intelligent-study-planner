@@ -198,3 +198,4 @@ The fix correctly distinguishes between:
 - **Local-only sessions** (no `googleEventId`) → Preserve for future sync
 
 This prevents "zombie sessions" from reappearing while maintaining correct behavior for sessions that were never synced.
+

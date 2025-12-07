@@ -401,3 +401,4 @@ Testing:
 - Confirmed single calendar creation in all scenarios
 - Console logs show promise cache blocking concurrent calls
 ```
+
