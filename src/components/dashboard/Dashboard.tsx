@@ -26,25 +26,18 @@ interface DashboardProps {
 }
 
 export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove, onSessionsImported, onSessionsDeleted, autoSyncTrigger, /* previewSession unused with FullCalendar */ /* editingSessionId unused */ isDialogOpen }: DashboardProps) {
-  // Filter for active courses that have at least one session assigned
-  // A course should only appear on the dashboard if it has sessions
-  const courseSessionCounts = new Map<string, number>();
-  scheduledSessions.forEach(session => {
-    if (session.courseId) {
-      courseSessionCounts.set(session.courseId, (courseSessionCounts.get(session.courseId) || 0) + 1);
-    }
-  });
-  
-  const activeCourses = courses.filter(c => 
-    c.status === 'active' && courseSessionCounts.has(c.id)
-  );
+  // Include both planned and active courses
+  const activeCourses = courses.filter(c => c.status === 'active' || c.status === 'planned');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
-  
-  // Get all sessions for active courses + unassigned sessions (blockers)
+
+
+  // Get all sessions for planned/active courses + unassigned sessions (blockers)
   const relevantSessions = scheduledSessions.filter(session => {
     if (!session.courseId) return true; // Include unassigned sessions
     return activeCourseIds.has(session.courseId);
   });
+
+  // (removed debug instrumentation)
   
   // Calculate total scheduled (planned) hours from course.scheduledHours (source of truth)
   // CRITICAL FIX (v0.6.5): Use course.scheduledHours instead of recalculating from sessions

@@ -64,27 +64,16 @@ import { calculateWeeklyAvailableMinutes, calculateEstimatedEndDate, calculateDu
 import { generateMockSessions } from './lib/mockSessions';
 
 function App() {
-  // ============================================================================
-  // DIALOG STATE - Which modals/dialogs are currently open
-  // ============================================================================
-  
-  const [showOnboarding, setShowOnboarding] = useState(false);               // Onboarding: study program setup
-  const [showAttendanceDialog, setShowAttendanceDialog] = useState(false);   // Attendance: mark session as attended/missed
-  const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);       // Feedback: actual hours worked, progress assessment
-  const [showPastSessionsReview, setShowPastSessionsReview] = useState(false); // Review: all past sessions for bulk feedback
-  
-  // ============================================================================
-  // NAVIGATION STATE - Current view and sync triggers
-  // ============================================================================
-  
+  // View & sync triggers
   const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
-  const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);         // Timestamp that triggers Google Calendar auto-sync
-  
-  // ============================================================================
-  // MISSED SESSION REPLANNING STATE
-  // ============================================================================
-  
-  const [showReplanDialog, setShowReplanDialog] = useState(false);           // Show replan confirmation dialog
+  const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);
+
+  // Dialog visibility states
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const [showPastSessionsReview, setShowPastSessionsReview] = useState<boolean>(false);
+  const [showAttendanceDialog, setShowAttendanceDialog] = useState<boolean>(false);
+  const [showFeedbackDialog, setShowFeedbackDialog] = useState<boolean>(false);
+  const [showReplanDialog, setShowReplanDialog] = useState<boolean>(false);
   const [replanCandidates, setReplanCandidates] = useState<ScheduledSession[]>([]); // Sessions selected for replanning
   const [replanTotalMinutes, setReplanTotalMinutes] = useState(0);           // Total minutes covered by candidates
   const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null); // Original missed session
@@ -906,6 +895,10 @@ function App() {
   const [showCourseDialog, setShowCourseDialog] = useState(false);
   const [showBlockDialog, setShowBlockDialog] = useState(false);
   const [showSessionDialog, setShowSessionDialog] = useState(false);
+  const [pendingSessionDraft, setPendingSessionDraft] = useState<{
+    date: string; startTime: string; endTime: string; endDate?: string; recurring?: boolean; recurrencePattern?: any;
+  } | null>(null);
+  const [pendingSelectCourseId, setPendingSelectCourseId] = useState<string | null>(null);
   const [editingCourse, setEditingCourse] = useState<Course | undefined>();
   const [editingBlock, setEditingBlock] = useState<StudyBlock | undefined>();
   const [editingSession, setEditingSession] = useState<ScheduledSession | undefined>();
@@ -1200,7 +1193,7 @@ function App() {
         });
       } else {
         const estimatedEndDate = calculateEstimatedEndDate(courseData.estimatedHours, weeklyCapacity);
-        await apiCreateCourse({
+        const created = await apiCreateCourse({
           name: courseData.name,
           type: courseData.type,
           ects: courseData.ects,
@@ -1209,6 +1202,10 @@ function App() {
           examDate: courseData.examDate,
           semester: courseData.semester,
         });
+        // Prepare to return to SessionDialog with the newly created course selected
+        if (pendingSessionDraft) {
+          setPendingSelectCourseId(created.id);
+        }
       }
       // Refresh from backend
       const [courses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
@@ -1218,6 +1215,18 @@ function App() {
       console.error('Course save failed', e);
     } finally {
       setEditingCourse(undefined);
+      // If we came from a SessionDialog with a pending draft, reopen it with prior settings
+      if (pendingSessionDraft) {
+        setCreateSessionData({
+          date: pendingSessionDraft.date,
+          startTime: pendingSessionDraft.startTime,
+          endTime: pendingSessionDraft.endTime,
+        });
+        setShowCourseDialog(false);
+        setShowSessionDialog(true);
+        // Keep pendingSelectCourseId to preselect the new course inside SessionDialog
+        setPendingSessionDraft(null);
+      }
     }
   };
 
@@ -1571,6 +1580,7 @@ function App() {
     try {
       // Update existing session or create new one
       if (editingSession) {
+        console.log('🔄 UPDATING existing session:', editingSession.id);
         await apiUpdateSession(editingSession.id, {
           // For updates we include courseId only when assigning or clearing; otherwise omit
           // Type assertion needed because API accepts null but TypeScript expects string|undefined
@@ -1591,7 +1601,14 @@ function App() {
           googleEventId: editingSession.googleEventId,
         });
       } else {
-        await apiCreateSession({
+        console.log('✨ CREATING new session with data:', {
+          courseId: courseIdForPayload,
+          date: sessionData.date,
+          startTime: sessionData.startTime,
+          endTime: sessionData.endTime,
+          hasRecurrence: !!sessionData.recurrence
+        });
+        const createdSession = await apiCreateSession({
           // For creation omit courseId when unassigned so backend validation (string) doesn't reject null
           ...(courseIdForPayload !== undefined && courseIdForPayload !== null ? { courseId: courseIdForPayload } : {}),
           studyBlockId: sessionData.studyBlockId,
@@ -1603,6 +1620,12 @@ function App() {
           notes: sessionData.notes,
           // Create recurrence pattern in backend if provided
           ...(sessionData.recurrence ? { recurrence: sessionData.recurrence } : {}),
+        });
+        console.log('✅ Backend created session:', {
+          sessionId: createdSession.id,
+          courseId: createdSession.courseId,
+          date: createdSession.date,
+          startTime: createdSession.startTime
         });
         // TODO: Implement proper server-side recurring session generation
         // Currently only creates single session with recurrence metadata
@@ -1661,13 +1684,21 @@ function App() {
         sampleWithId: freshSessions.find(s => s.googleEventId) ? {
           id: freshSessions.find(s => s.googleEventId)!.id.substring(0, 20),
           googleEventId: freshSessions.find(s => s.googleEventId)!.googleEventId?.substring(0, 20)
-        } : 'NONE'
+        } : 'NONE',
+        sessionsWithCourses: freshSessions.filter(s => s.courseId).length,
+        sessionsWithoutCourses: freshSessions.filter(s => !s.courseId).length,
+        allSessionsOverview: freshSessions.map(s => ({
+          id: s.id.substring(0, 8),
+          courseId: s.courseId ? s.courseId.substring(0, 8) + '...' : 'NONE',
+          courseIdFull: s.courseId || 'NONE',
+          date: s.date,
+          time: `${s.startTime}-${s.endTime}`
+        }))
       });
       setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(freshSessions as ScheduledSession[]);
       
       // Auto-activate course ONLY if there is a PAST session (end time < now) assigned to it
-      // Course remains 'planned' until studying actually starts (past session exists)
       if (sessionData.courseId) {
         const course = coursesWithUpdatedHours.find(c => c.id === sessionData.courseId);
         if (course && course.status === 'planned') {
@@ -1676,25 +1707,19 @@ function App() {
             const sessionEndDateTime = new Date(`${s.date}T${s.endTime}`);
             return sessionEndDateTime <= now;
           });
-          
           if (hasPastSession) {
-            // Transition: planned → active (studying has started)
-            console.log(`🚀 Activating course ${course.name} - past session detected`);
             const token = localStorage.getItem('authToken');
             await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001/api'}/courses/${course.id}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
               body: JSON.stringify({ status: 'active' }),
             });
-            // Refresh courses again to get updated status and recalculate scheduledHours
             const againCourses = await apiGetCourses();
             const againWithHours = againCourses.map(c => ({
               ...c,
               scheduledHours: scheduledHoursByCourse.get(c.id) || 0
             }));
             setCourses(againWithHours as Course[]);
-          } else {
-            console.log(`📅 Course ${course.name} remains planned - only future sessions scheduled`);
           }
         }
       }
@@ -1813,6 +1838,8 @@ function App() {
     // Trigger auto-sync
     setAutoSyncTrigger(Date.now());
   };
+
+  // (removed debug instrumentation)
 
   // Bulk delete all sessions (user wants to reset calendar)
   const handleDeleteAllSessions = async () => {
@@ -2531,10 +2558,15 @@ function App() {
         session={editingSession}
         courses={courses}
         sessions={scheduledSessions}
-        onCreateCourse={handleAddCourse}
+        onCreateCourse={(draft) => {
+          setPendingSessionDraft(draft);
+          setPendingSelectCourseId(null);
+          handleAddCourse();
+        }}
         initialDate={createSessionData?.date}
         initialStartTime={createSessionData?.startTime}
         initialEndTime={createSessionData?.endTime}
+        initialCourseId={pendingSelectCourseId ?? undefined}
         onPreviewChange={setPreviewSession}
       />
       

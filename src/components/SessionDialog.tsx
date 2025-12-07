@@ -50,14 +50,15 @@ interface SessionDialogProps {
   session?: ScheduledSession;
   courses: Course[];
   sessions?: ScheduledSession[];
-  onCreateCourse?: () => void;
+  onCreateCourse?: (draft: { date: string; startTime: string; endTime: string; endDate?: string; recurring?: boolean; recurrencePattern?: RecurrencePattern | null; }) => void;
   initialDate?: string;
   initialStartTime?: string;
   initialEndTime?: string;
+  initialCourseId?: string;
   onPreviewChange?: (preview: ScheduledSession | null) => void; // Live preview callback
 }
 
-export function SessionDialog({ open, onClose, onSave, onDelete, session, courses, sessions = [], onCreateCourse, initialDate, initialStartTime, initialEndTime, onPreviewChange }: SessionDialogProps) {
+export function SessionDialog({ open, onClose, onSave, onDelete, session, courses, sessions = [], onCreateCourse, initialDate, initialStartTime, initialEndTime, initialCourseId, onPreviewChange }: SessionDialogProps) {
   // Debug logging removed - too verbose during normal operation
   // Uncomment if debugging dialog state issues:
   // console.log('SessionDialog render:', { session: session?.id, hasOnDelete: !!onDelete, sessionCourseId: session?.courseId });
@@ -82,6 +83,19 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
   const [startDateOpen, setStartDateOpen] = useState(false);
   const [endDateOpen, setEndDateOpen] = useState(false);
   
+  // Initialize defaults from props when opening
+  useEffect(() => {
+    if (!open || session) return;
+    if (initialDate) {
+      setDate(initialDate);
+      setDateDisplay(formatDateDE(initialDate));
+    }
+    if (initialStartTime) setStartTime(initialStartTime);
+    if (initialEndTime) setEndTime(initialEndTime);
+    if (initialCourseId) setCourseId(initialCourseId);
+    setEndDateDisplay(endDate ? formatDateDE(endDate) : '');
+  }, [open, session, initialDate, initialStartTime, initialEndTime, initialCourseId, endDate]);
+
   // Initialize period based on current time
   const getInitialPeriod = (timeStr: string): 'AM' | 'PM' => {
     const [hourStr] = timeStr.split(':');
@@ -477,6 +491,19 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
       completionPercentage: 0,
     };
 
+    console.log('🚀 SessionDialog: Preparing to save session:', {
+      courseId: courseId,
+      courseIdAfterConversion: sessionData.courseId,
+      date: effectiveDate,
+      endDate: sessionData.endDate,
+      startTime,
+      endTime,
+      durationMinutes: duration,
+      recurring,
+      hasRecurrencePattern: !!recurrencePattern,
+      isEditing: !!session
+    });
+
     // Add recurrence data if enabled
     if (recurring && recurrencePattern) {
       // Adjust COUNT semantics: user-entered count should include the first visible occurrence (start date or first BYDAY),
@@ -580,8 +607,9 @@ export function SessionDialog({ open, onClose, onSave, onDelete, session, course
                       type="button"
                       className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-sm transition-colors"
                       onClick={() => {
+                        const draft = { date, startTime, endTime, endDate, recurring, recurrencePattern };
                         onClose();
-                        onCreateCourse();
+                        onCreateCourse(draft);
                       }}
                     >
                       <Plus className="w-4 h-4" />

@@ -154,8 +154,46 @@ router.post('/', (req: AuthRequest, res) => {
       recalculateScheduledHours(data.courseId, req.user!.userId);
     }
 
-    const session = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(sessionId);
-    res.status(201).json(session);
+    const session = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(sessionId) as any;
+    
+    // Get recurrence pattern if exists
+    const recurrence = dbWrapper.prepare('SELECT * FROM recurrence_patterns WHERE session_id = ?').get(sessionId) as any;
+    
+    // Convert snake_case to camelCase for frontend (same mapping as GET endpoint)
+    const mappedSession = {
+      id: session.id,
+      userId: session.user_id,
+      courseId: session.course_id,
+      studyBlockId: session.study_block_id,
+      date: session.date,
+      startTime: session.start_time,
+      endDate: session.end_date,
+      endTime: session.end_time,
+      durationMinutes: session.duration_minutes,
+      completed: session.completed === 1,
+      completionPercentage: session.completion_percentage,
+      notes: session.notes,
+      googleEventId: session.google_event_id,
+      googleCalendarId: session.google_calendar_id,
+      recurringEventId: session.recurring_event_id,
+      isRecurrenceException: session.is_recurrence_exception === 1,
+      lastModified: session.last_modified,
+    };
+    
+    if (recurrence) {
+      res.status(201).json({
+        ...mappedSession,
+        recurrence: {
+          rrule: recurrence.rrule,
+          dtstart: recurrence.dtstart,
+          until: recurrence.until,
+          count: recurrence.count,
+          exdates: recurrence.exdates ? JSON.parse(recurrence.exdates) : [],
+        },
+      });
+    } else {
+      res.status(201).json(mappedSession);
+    }
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: 'Invalid input', details: error.errors });
@@ -234,8 +272,46 @@ router.put('/:id', (req: AuthRequest, res) => {
       recalculateScheduledHours(newCourseId, req.user!.userId);
     }
 
-    const updated = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(req.params.id);
-    res.json(updated);
+    const updated = dbWrapper.prepare('SELECT * FROM scheduled_sessions WHERE id = ?').get(req.params.id) as any;
+    
+    // Get recurrence pattern if exists
+    const recurrence = dbWrapper.prepare('SELECT * FROM recurrence_patterns WHERE session_id = ?').get(req.params.id) as any;
+    
+    // Convert snake_case to camelCase for frontend (same mapping as GET endpoint)
+    const mappedSession = {
+      id: updated.id,
+      userId: updated.user_id,
+      courseId: updated.course_id,
+      studyBlockId: updated.study_block_id,
+      date: updated.date,
+      startTime: updated.start_time,
+      endDate: updated.end_date,
+      endTime: updated.end_time,
+      durationMinutes: updated.duration_minutes,
+      completed: updated.completed === 1,
+      completionPercentage: updated.completion_percentage,
+      notes: updated.notes,
+      googleEventId: updated.google_event_id,
+      googleCalendarId: updated.google_calendar_id,
+      recurringEventId: updated.recurring_event_id,
+      isRecurrenceException: updated.is_recurrence_exception === 1,
+      lastModified: updated.last_modified,
+    };
+    
+    if (recurrence) {
+      res.json({
+        ...mappedSession,
+        recurrence: {
+          rrule: recurrence.rrule,
+          dtstart: recurrence.dtstart,
+          until: recurrence.until,
+          count: recurrence.count,
+          exdates: recurrence.exdates ? JSON.parse(recurrence.exdates) : [],
+        },
+      });
+    } else {
+      res.json(mappedSession);
+    }
   } catch (error) {
     console.error('Update session error:', error);
     res.status(500).json({ error: 'Internal server error' });

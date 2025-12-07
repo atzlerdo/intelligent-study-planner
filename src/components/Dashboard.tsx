@@ -19,15 +19,38 @@ interface DashboardProps {
 }
 
 export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionClick, onCreateSession, onEditCourse, onSessionMove }: DashboardProps) {
-  // Filter for active courses only
-  const activeCourses = courses.filter(c => c.status === 'active');
+  // Filter for active AND planned courses (sessions can exist for planned courses with future dates)
+  const activeCourses = courses.filter(c => c.status === 'active' || c.status === 'planned');
   const activeCourseIds = new Set(activeCourses.map(c => c.id));
+  // DEBUG: log course statuses and active ids
+  try {
+    console.log('DEBUG: Dashboard courses overview', {
+      totalCourses: courses.length,
+      statuses: courses.map(c => ({ id: c.id, name: c.name, status: c.status })),
+      activeCount: activeCourses.length,
+      activeIds: Array.from(activeCourseIds)
+    });
+  } catch {}
   
-  // Get all sessions for active courses + unassigned sessions (blockers)
+  // Get all sessions for active/planned courses + unassigned sessions (blockers)
   const relevantSessions = scheduledSessions.filter(session => {
     if (!session.courseId) return true; // Include unassigned sessions
     return activeCourseIds.has(session.courseId);
   });
+  
+  // DEBUG instrumentation: observe Dashboard filtering behavior
+  try {
+    const totalBefore = scheduledSessions.length;
+    const withCourseBefore = scheduledSessions.filter(s => s.courseId != null).length;
+    const totalAfter = relevantSessions.length;
+    const withCourseAfter = relevantSessions.filter(s => s.courseId != null).length;
+    console.log('DEBUG: Dashboard sessions filter', {
+      totalBefore,
+      withCourseBefore,
+      totalAfter,
+      withCourseAfter,
+    });
+  } catch {}
   
   // Calculate totals
   const scheduledHours = courses

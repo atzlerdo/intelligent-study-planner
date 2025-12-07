@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.6.10] - 2025-12-07
+
+### Compact Overview
+- Fix: Restored missing app state in `App.tsx` (`currentView`, `autoSyncTrigger`, dialog booleans) and re-added `generateMockSessions` import to resolve build errors.
+- Fix: Prevented accidental session creation during drag by switching day-grid interactions to pointer events in `WeekCalendar.tsx` and aligning with session drag handlers.
+- UX: After creating a course from `SessionDialog`, the dialog reopens with previous date/time and the new course preselected.
+- Behavior: Courses only auto-activate from `planned` → `active` when a past session exists; future-only sessions no longer activate courses.
+- Stability: Removed stray top-level `await`, fixed `SessionDialog` initialization effect dependencies, and verified TypeScript/Vite production build.
+- Visibility: Dashboard filtering includes planned courses to ensure assigned sessions remain visible.
+
 ## [v0.6.9] - 2024-11-24
 
 ### Fixed - Past Sessions Counted as Scheduled Hours

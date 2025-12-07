@@ -34,6 +34,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   const isMobile = useIsMobile();
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
+  
+  // (removed debug instrumentation)
   const x = useMotionValue(0);
   // Require an explicit fresh pointer down after dialogs close before horizontal week drag is re-enabled.
   // This prevents accidental horizontal panning when a dialog is dismissed with Escape and the user moves the mouse.
@@ -712,7 +714,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   };
 
   // Drag-to-create handlers
-  const handleCellMouseDown = (date: Date, e: React.MouseEvent) => {
+  const handleCellPointerDown = (date: Date, e: React.PointerEvent) => {
     // Don't create a new session if we're interacting with an existing session
     if (!onCreateSession || draggedSession || isInteractingWithSession) return;
     
@@ -732,7 +734,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     setDragCurrent({ minutes: snappedMinutes });
   };
 
-  const handleMouseMove = (_date: Date, e: React.MouseEvent) => {
+  const handleCellPointerMove = (_date: Date, e: React.PointerEvent) => {
     if (draggedSession) return; // Don't drag-to-create when moving a session
     if (!isDraggingNew || !dragStart) return;
     
@@ -748,7 +750,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     setDragCurrent({ minutes: snappedMinutes });
   };
 
-  const handleMouseUp = () => {
+  const handleCellPointerUp = () => {
     if (!isDraggingNew || !dragStart || !dragCurrent || !onCreateSession) {
       setIsDraggingNew(false);
       setDragStart(null);
@@ -1195,11 +1197,11 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                       {/* Hour cells - background grid */}
                       <div 
                         className="relative select-none" 
-                        onMouseDown={(e) => handleCellMouseDown(date, e)}
-                        onMouseMove={(e) => handleMouseMove(date, e)}
-                        onMouseUp={handleMouseUp}
-                        onMouseLeave={() => {
-                          if (isDraggingNew) handleMouseUp();
+                        onPointerDown={(e) => handleCellPointerDown(date, e)}
+                        onPointerMove={(e) => handleCellPointerMove(date, e)}
+                        onPointerUp={handleCellPointerUp}
+                        onPointerLeave={() => {
+                          if (isDraggingNew) handleCellPointerUp();
                         }}
                         style={{ cursor: onCreateSession ? (isDraggingNew ? 'crosshair' : 'pointer') : 'default' }}
                       >

@@ -1,0 +1,1 @@
+{"root":["./src/auth.ts","./src/db.ts","./src/index.ts","./src/routes/admin.ts","./src/routes/auth.ts","./src/routes/courses.ts","./src/routes/google-calendar.ts","./src/routes/sessions.ts","./src/routes/study-program.ts","./src/scripts/recalculate-all-courses.ts"],"version":"5.9.3"}

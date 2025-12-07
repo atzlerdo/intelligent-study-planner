@@ -51,9 +51,21 @@ export function CalendarView({
   // Get sessions for a specific day
   const getSessionsForDay = (date: Date): ScheduledSession[] => {
     const dateStr = date.toISOString().split('T')[0];
-    return sessions
+    const filtered = sessions
       .filter(s => s.date === dateStr)
       .sort((a, b) => a.startTime.localeCompare(b.startTime));
+    
+    if (filtered.length > 0) {
+      console.log(`📅 CalendarView: Found ${filtered.length} sessions for ${dateStr}:`, 
+        filtered.map(s => ({
+          id: s.id.substring(0, 8),
+          courseId: s.courseId?.substring(0, 8) || 'unassigned',
+          time: `${s.startTime}-${s.endTime}`
+        }))
+      );
+    }
+    
+    return filtered;
   };
 
   const getCourseName = (courseId?: string): string => {
@@ -97,6 +109,17 @@ export function CalendarView({
     const daySessions = getSessionsForDay(day);
     return sum + daySessions.reduce((s, session) => s + session.durationMinutes / 60, 0);
   }, 0);
+
+  // Log all sessions passed to CalendarView
+  console.log('📊 CalendarView: Rendering with sessions:', {
+    totalSessions: sessions.length,
+    sessionsOverview: sessions.map(s => ({
+      id: s.id.substring(0, 8),
+      courseId: s.courseId?.substring(0, 8) || 'unassigned',
+      date: s.date,
+      time: `${s.startTime}-${s.endTime}`
+    }))
+  });
 
   return (
     <div className="h-full overflow-y-auto scrollbar-thin max-w-md mx-auto p-4 space-y-4">
