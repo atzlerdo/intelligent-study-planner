@@ -75,6 +75,7 @@ ScheduledSession: courseId (null = unassigned), completed, googleEventId (for sy
 npm run dev      # Start Vite dev server (port 5173)
 npm run build    # TypeScript compile + Vite build
 npm run lint     # ESLint with flat config format
+npm run typecheck # TypeScript type-check (no emit)
 ```
 
 ## Styling Patterns
@@ -124,6 +125,14 @@ npm run lint     # ESLint with flat config format
 - `logs/` folder for debug output (git-ignored, never synced)
 - Database file: `server/data/study-planner.db` (SQLite)
 - Use DB Browser for SQLite or VS Code SQLite Viewer to inspect data
+
+### Agent Pre-Commit Checklist (MANDATORY)
+- Run `npm run lint` and fix all errors/warnings before committing.
+- Run `npm run typecheck` and fix any TypeScript errors before committing.
+- Run `npm run build` to ensure the project compiles without errors.
+- Smoke-test: `npm run dev` and open the changed flow to ensure no runtime errors.
+- Update `CHANGELOG.md` for user-visible fixes/behaviors.
+- Keep changes minimal and focused; avoid unrelated refactors.
 
 ## Common Gotchas
 1. **Date handling**: Always use local timezone strings (`YYYY-MM-DD`) without UTC conversion

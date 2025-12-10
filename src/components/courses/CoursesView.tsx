@@ -12,7 +12,7 @@ interface CoursesViewProps {
   onDeleteCourse: (courseId: string) => void;
   onRequestDeleteCourse?: (course: Course) => void;
   onCompleteCourse: (courseId: string) => void;
-  onViewChange: (view: 'dashboard' | 'courses' | 'calendar') => void;
+  onViewChange: (view: 'dashboard' | 'courses') => void;
 }
 
 export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCourse, onDeleteCourse, onRequestDeleteCourse }: CoursesViewProps) {

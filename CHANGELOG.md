@@ -7,6 +7,7 @@
 - Behavior: Validate and align the active course list rule so a course appears as active only if it has at least one session (future planned, past planned, or past attended). Newly created courses without sessions no longer show up in the active list.
 - DevX: Keep lint clean; ensure effects/persistence run only after authentication; no unauthorized PUTs during login.
 - Data: Include `server/data/study-planner.db` with seed test data for quick local verification. Test user documented in README (email/password) remains applicable.
+- Build: Fix 7 TypeScript production build errors (missing variables, unused functions, type mismatches) with type-only changes that preserve all runtime behavior. Added mandatory pre-commit checklist to agent instructions (lint + typecheck + build).
 
 
 ## [v0.6.10] - 2025-12-07

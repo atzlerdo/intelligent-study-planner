@@ -879,14 +879,13 @@ function App() {
     const totalCompleted = coursesIn.reduce((sum, c) => sum + (c.completedHours || 0), 0);
     const completedECTS = coursesIn.reduce((sum, c) => sum + (c.status === 'completed' ? (c.ects || 0) : 0), 0);
     setStudyProgram(prev => {
-      const updated: StudyProgram = {
+      const updated = {
         ...prev,
         completedECTS,
-        // @ts-expect-error client-only aggregate fields
+        // Client-only aggregate fields for overview display
         aggregatedCompletedHours: totalCompleted,
-        // @ts-expect-error client-only aggregate fields
         aggregatedEstimatedHours: totalEstimated,
-      };
+      } as StudyProgram;
       if (isAuthenticated() && updated.completedECTS !== prev.completedECTS) {
         apiUpdateStudyProgram({ ...updated, aggregatedCompletedHours: undefined, aggregatedEstimatedHours: undefined } as unknown as StudyProgram).catch(() => {});
       }
@@ -1460,11 +1459,11 @@ function App() {
 
 
   // Session CRUD operations
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleAddSession = () => {
-    setEditingSession(undefined);
-    setShowSessionDialog(true);
-  };
+  // NOTE: handleAddSession preserved for potential future use
+  // const handleAddSession = () => {
+  //   setEditingSession(undefined);
+  //   setShowSessionDialog(true);
+  // };
 
   const handleEditSession = (session: ScheduledSession) => {
     console.log('🖱️ Clicked session:', { 
@@ -1844,6 +1843,7 @@ function App() {
       if (sessionData.courseId) {
         const course = coursesWithUpdatedHours.find(c => c.id === sessionData.courseId);
         if (course && course.status === 'planned') {
+          const now = new Date();
           const hasPastSession = freshSessions.some(s => {
             if (s.courseId !== course.id) return false;
             const sessionEndDateTime = new Date(`${s.date}T${s.endTime}`);
@@ -1857,9 +1857,19 @@ function App() {
               body: JSON.stringify({ status: 'active' }),
             });
             const againCourses = await apiGetCourses();
+            // Recalculate scheduled hours for each course from fresh sessions
+            const scheduledHoursByCourseLocal = new Map<string, number>();
+            for (const s of freshSessions) {
+              if (!s.courseId) continue;
+              const end = new Date(`${s.date}T${s.endTime}`);
+              const hours = s.durationMinutes / 60;
+              if (end > now && !s.completed) {
+                scheduledHoursByCourseLocal.set(s.courseId, (scheduledHoursByCourseLocal.get(s.courseId) || 0) + hours);
+              }
+            }
             const againWithHours = againCourses.map(c => ({
               ...c,
-              scheduledHours: scheduledHoursByCourse.get(c.id) || 0
+              scheduledHours: scheduledHoursByCourseLocal.get(c.id) || 0
             }));
             setCourses(againWithHours as Course[]);
           }
@@ -1986,7 +1996,8 @@ function App() {
   // (removed debug instrumentation)
 
   // Bulk delete all sessions (user wants to reset calendar)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // NOTE: handleDeleteAllSessions preserved for potential future use
+  /*
   const handleDeleteAllSessions = async () => {
     try {
       console.log('🗑️ App: Bulk deleting ALL sessions');
@@ -2018,6 +2029,7 @@ function App() {
     setShowSessionDialog(false);
     setAutoSyncTrigger(Date.now());
   };
+  */
 
   // Handle sessions imported from Google Calendar
   const lastImportRef = useRef<{ time: number; sessionIds: Set<string> }>({ 

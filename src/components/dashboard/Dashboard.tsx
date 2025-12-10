@@ -12,8 +12,8 @@ interface DashboardProps {
   studyProgram: StudyProgram;
   scheduledSessions: ScheduledSession[];
   onSessionClick: (session: ScheduledSession) => void;
-  onViewChange: (view: 'dashboard' | 'courses' | 'calendar') => void;
-  currentView: 'dashboard' | 'courses' | 'calendar';
+  onViewChange: (view: 'dashboard' | 'courses') => void;
+  currentView: 'dashboard' | 'courses';
   onCreateSession?: (date: string, startTime: string, endTime: string) => void;
   onEditCourse?: (course: Course) => void;
   onSessionMove?: (session: ScheduledSession, newDate: string, newStartTime: string, newEndTime: string) => void;
