@@ -12,7 +12,7 @@
 If you discover a security vulnerability in the Intelligent Study Planner, please report it responsibly:
 
 1. **DO NOT** open a public GitHub issue
-2. Send details to: [Your contact email - REPLACE THIS]
+2. Send details to: i'm not ready to share my mail or setup an account for this project...
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
