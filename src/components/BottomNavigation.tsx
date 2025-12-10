@@ -1,17 +1,19 @@
-import { Home, BookOpen, Menu, X } from 'lucide-react';
+import { Home, BookOpen, Calendar as CalendarIcon, LogOut, Menu, X } from 'lucide-react';
 import { useState } from 'react';
 
 interface BottomNavigationProps {
   currentView: 'dashboard' | 'courses' | 'calendar';
   onViewChange: (view: 'dashboard' | 'courses' | 'calendar') => void;
+  onLogout?: () => void;
 }
 
-export function BottomNavigation({ currentView, onViewChange }: BottomNavigationProps) {
+export function BottomNavigation({ currentView, onViewChange, onLogout }: BottomNavigationProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const navItems = [
     { id: 'dashboard' as const, icon: Home, label: 'Start' },
     { id: 'courses' as const, icon: BookOpen, label: 'Kurse' },
+    { id: 'calendar' as const, icon: CalendarIcon, label: 'Kalender' },
   ];
 
   const handleNavClick = (view: 'dashboard' | 'courses' | 'calendar') => {
@@ -35,7 +37,7 @@ export function BottomNavigation({ currentView, onViewChange }: BottomNavigation
           isMenuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >
-        <div className="p-4 space-y-1 min-w-[200px]">
+        <div className="p-4 space-y-1 min-w-[220px]">
           {navItems.map(item => {
             const Icon = item.icon;
             const isActive = currentView === item.id;
@@ -55,6 +57,18 @@ export function BottomNavigation({ currentView, onViewChange }: BottomNavigation
               </button>
             );
           })}
+
+          {/* Logout action */}
+          <button
+            onClick={() => {
+              if (onLogout) onLogout();
+              setIsMenuOpen(false);
+            }}
+            className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl transition-all text-lg font-bold bg-gradient-to-br from-white to-gray-50 text-gray-900 border-2 border-gray-500 hover:from-gray-50 hover:to-gray-100 hover:border-gray-600 shadow-lg hover:shadow-xl"
+          >
+            <LogOut className="w-6 h-6 flex-shrink-0" />
+            <span>Abmelden</span>
+          </button>
         </div>
       </div>
 

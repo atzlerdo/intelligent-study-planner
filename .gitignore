@@ -31,6 +31,9 @@ server/data/*.db
 server/data/*.sqlite
 server/data/*.sqlite3
 
+# Allow publishing the demo test database for local verification
+!server/data/study-planner.db
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

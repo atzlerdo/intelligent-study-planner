@@ -52,6 +52,7 @@
 
       ### Main View vs Courses Overview (Visibility Rule)
       - Dashboard ("Aktive Kurse"): shows only non-completed courses that have at least one scheduled session (past or future). Planned-only courses without sessions are not shown here.
+      - For detailed dashboard progress rules (completed/scheduled/remaining hours and ECTS handling), see `../DASHBOARD_PROGRESS_CALCULATION.md`.
       - Courses Overview: lists all courses with their status badges (planned, active, completed) and is not filtered by session presence.
 
 ### Authentication Flow

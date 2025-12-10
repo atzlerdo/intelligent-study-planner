@@ -2,14 +2,14 @@
 
 A full-stack study planning application for managing university courses with Google Calendar integration.
 
-## 📚 Documentation
+## Documentation
 
-- **[Setup Guide](docs/SETUP_GUIDE.md)** - Complete installation and configuration instructions
-- **[Security Policy](SECURITY.md)** - Security best practices and vulnerability reporting
-- **[Tech Stack](docs/TECH_STACK.md)** - Technologies and frameworks used
-- **[Project Overview](docs/PROJECT_OVERVIEW.md)** - Architecture and design decisions
-- **[Changelog](CHANGELOG.md)** - Version history and changes
-- **[Fix Documentation](docs/fixes/)** - Detailed bug fix reports
+- [Setup Guide](docs/SETUP_GUIDE.md) — Installation and configuration
+- [Security Policy](SECURITY.md) — Security practices and reporting
+- [Tech Stack](docs/TECH_STACK.md) — Technologies and frameworks
+- [Project Overview](docs/PROJECT_OVERVIEW.md) — Architecture and design
+- [Changelog](CHANGELOG.md) — Version history and changes
+- [Fix Documentation](docs/fixes/) — Detailed bug fix reports
 
 ## Prerequisites
 
@@ -102,6 +102,67 @@ npm run dev          # Frontend on http://localhost:5173
 cd server
 npm run dev          # Backend on http://localhost:3001
 ```
+
+### 2.1 Use the Example Test User (Optional)
+
+This repository documents only demo credentials for testing and does not contain any production secrets.
+
+- Email: `test@test.test`
+- Password: `testtest`
+
+Prepare the example database (PowerShell on Windows):
+
+```powershell
+# From repo root
+cd "server"
+
+# Ensure the backend uses the same DB file as seeding
+$env:DATABASE_PATH = "$PWD\data\study-planner.db"
+
+# 1) Create/reset the test user's password (creates user if missing)
+node .\reset-password.cjs "test@test.test" "testtest"
+
+# 2) Remove all other users and their data (keeps only test@test.test)
+node .\clear-db-except-test.cjs "test@test.test"
+
+# 3) Seed a comprehensive dataset (courses across semesters + sessions)
+node .\seed-full-test-user.cjs "test@test.test"
+
+# 4) Start backend (keep this terminal open)
+$env:PORT = "3001"; $env:FRONTEND_URL = "http://localhost:5173"; npm run dev
+```
+
+Then open a new terminal for the frontend and run `npm run dev` from the repo root.
+
+Verify via API (optional):
+
+```powershell
+$body = '{"email":"test@test.test","password":"testtest"}'
+$login = Invoke-RestMethod -Uri "http://localhost:3001/api/auth/login" -Method Post -ContentType "application/json" -Body $body
+$headers = @{ Authorization = "Bearer $($login.token)" }
+Invoke-RestMethod -Uri "http://localhost:3001/api/courses" -Method Get -Headers $headers | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri "http://localhost:3001/api/sessions" -Method Get -Headers $headers | ConvertTo-Json -Depth 3
+```
+
+Tip: If you previously used another DB path, ensure your backend terminal shows the DB path it loaded and that it matches `server\data\study-planner.db`.
+
+#### Maintenance: Deduplicate Sessions
+Use the helper script to remove exact duplicate sessions for a user.
+
+```powershell
+cd "server"
+$env:DATABASE_PATH = "$PWD\data\study-planner.db"
+node .\scripts\deduplicate-sessions.cjs "test@test.test"
+```
+
+## Calendar UX Updates
+- Mobile calendar defaults to 4 days; toggle to 7 days in the header. Preference persists in `localStorage` (`calendar.mobileDaysPerView`).
+- Overlapping sessions in the week view render side-by-side for clarity.
+
+## Security & Secrets
+- Only the demo user credentials (`test@test.test` / `testtest`) are intended to be public. Do not publish any other secrets.
+- Always set and use `DATABASE_PATH` locally; do not commit `.env` files or absolute paths.
+- Google OAuth credentials and API keys must be stored in `.env.local` files and never committed.
 
 ### 3. Create Your Account
 

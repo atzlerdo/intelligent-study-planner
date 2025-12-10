@@ -315,14 +315,9 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
         )}
       </div>
       
-      {/* Floating Add Button */}
-      <Button
-        onClick={onAddCourse}
-        size="icon"
-        className="fixed bottom-20 right-6 h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-shadow z-50 lg:bottom-6"
-      >
-        <Plus className="w-6 h-6" />
-      </Button>
+      {/* Floating Add Button - match burger FAB style */}
+      {/* Mobile Add Course FAB (bottom-right, same size/height as menu button) */}
+      {/* Mobile Add Course FAB removed as requested */}
     </div>
   );
 }

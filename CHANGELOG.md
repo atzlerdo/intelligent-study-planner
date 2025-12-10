@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.11 - 2025-12-10
+
+- Fix: Resolve Vite/Babel build failure by removing a duplicate `recalcStudyProgramFromCourses` declaration in `src/App.tsx` that caused "Identifier has already been declared" errors. Keeps the functional `setStudyProgram(prev => ...)` implementation to avoid effect dependency loops and unauthorized pre-auth updates.
+- Fix: Normalize course progress bar math in `src/components/courses/CoursesView.tsx` to prevent NaN/overflow when `estimatedHours` is zero or when `completedHours + scheduledHours` exceeds `estimatedHours`. Segments (completed/scheduled/remaining) are clamped and percentages are bounded to sum to ≤ 100%.
+- Behavior: Validate and align the active course list rule so a course appears as active only if it has at least one session (future planned, past planned, or past attended). Newly created courses without sessions no longer show up in the active list.
+- DevX: Keep lint clean; ensure effects/persistence run only after authentication; no unauthorized PUTs during login.
+- Data: Include `server/data/study-planner.db` with seed test data for quick local verification. Test user documented in README (email/password) remains applicable.
+
+
 ## [v0.6.10] - 2025-12-07
 
 ### Compact Overview
@@ -11,16 +20,34 @@
 - Visibility: Dashboard filtering includes planned courses to ensure assigned sessions remain visible.
 
 ## [v0.6.9] - 2024-11-24
-
-### Fixed - Past Sessions Counted as Scheduled Hours
-- **Problem**: When creating a session in the past (e.g., session at 06:00 when it's now 08:00), the session was incorrectly counted in "planned hours" instead of being excluded
-- **Example**: Created session on Nov 24 06:00-07:00 (past) → scheduledHours jumped from 7.75h to 8.75h (WRONG)
-- **Root cause**: All three scheduledHours calculation points were using date-only comparison (`session.date < today`), which failed for past sessions on the current day
-- **Impact**: 
   - Past sessions showed in yellow "planned hours" bar instead of being excluded
-  - Marking them attended didn't reduce planned hours (stayed at inflated value)
-  - Progress bars showed incorrect future workload
+## [v0.6.10] - 2025-12-08
+- Calendar (mobile): Default to 4-day view with a user-toggle to restore 7 days; preference persisted in localStorage (`calendar.mobileDaysPerView`).
+- Calendar (week view): Overlapping sessions now render side-by-side using a sweep-line layout per day.
+- Scripts: Added `server/scripts/deduplicate-sessions.cjs` to safely remove duplicate scheduled sessions per user (keeps latest by `last_modified`).
+- Backend/scripts alignment: Standardized all maintenance scripts to respect `DATABASE_PATH` for consistent DB targeting.
+- Password reset script: Cleaned duplicate code in `reset-password.cjs`; unified env-aware behavior and fixed Windows buffer write.
+- Documentation: README updated with explicit test user, DB alignment instructions, and safety notes about secrets.
 - **Fix**: Changed ALL scheduledHours calculations to compare session **end time** (date + time) with current timestamp
+## v0.6.11 – Mobile Logout, Menu Consistency, Calendar Removal
+
+### Changes
+- Mobile burger menu updated to include all relevant web menu items.
+- Added explicit Logout action in the mobile burger menu, wired to authentication state.
+- Strengthened mobile logout handling to reliably show the authentication screen by resetting `authChecked` and closing residual dialogs.
+- Removed Calendar view from application routing and mobile menu (feature not in use).
+- Added bottom-right add-course button in Courses view, matching burger menu style and size.
+
+### Security and Secrets
+- No secrets are committed to the repository. Only demo credentials are referenced for testing:
+  - Email: `test@test.test`
+  - Password: `testtest`
+- Authentication tokens are stored in `localStorage` and cleared on logout.
+- Google Calendar cache keys are purged on logout to prevent cross-user leakage.
+
+### Documentation
+- Converted notes to documentation-style formatting across README and related guides.
+- Removed decorative icons/emoji from documentation for a professional tone.
 - **Technical Details**:
   - **OLD**: `session.date < today` → Only excluded sessions from previous days
   - **NEW**: `new Date(session.date + 'T' + session.endTime) <= now` → Excludes any session that has ended

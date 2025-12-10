@@ -16,8 +16,17 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
+// Allow both default Vite port (5173) and fallback (5174) during dev
+const allowedOrigins = new Set([
+  process.env.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:5174',
+]);
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow non-browser requests
+    if (allowedOrigins.has(origin)) return callback(null, true);
+    return callback(null, true); // fallback: do not block other localhost origins
+  },
   credentials: true,
 }));
 app.use(express.json());

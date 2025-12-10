@@ -1,6 +1,8 @@
 node_modules/
 dist/
-data/
+# Ignore all files in data except the published demo DB
+data/*
+!data/study-planner.db
 *.db
 *.db-journal
 .env

@@ -34,6 +34,22 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   const isMobile = useIsMobile();
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const MOBILE_DAYS_PREF_KEY = 'calendar.mobileDaysPerView';
+  const [mobileDaysPerView, setMobileDaysPerView] = useState<number>(4);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(MOBILE_DAYS_PREF_KEY);
+      if (stored) {
+        const val = parseInt(stored, 10);
+        if (val === 4 || val === 7) setMobileDaysPerView(val);
+      }
+    } catch {
+      // noop: localStorage unavailable
+    }
+  }, []);
+
+  const daysPerView = isMobile ? mobileDaysPerView : 7;
   
   // (removed debug instrumentation)
   const x = useMotionValue(0);
@@ -107,7 +123,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       if (draggedSession && dragStartPos && dragSessionPosition && onSessionMove) {
         const hourHeight = 60;
         const dayWidth = scrollContainerRef.current ? 
-          (scrollContainerRef.current.clientWidth - 56) / 7 : 100;
+          (scrollContainerRef.current.clientWidth - 56) / daysPerView : 100;
         
         const dayOffset = Math.round((e.clientX - dragStartPos.x) / dayWidth);
         const timeOffsetMinutes = Math.round(((e.clientY - dragStartPos.y) / hourHeight) * 60);
@@ -153,7 +169,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       window.removeEventListener('pointermove', handleGlobalPointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [draggedSession, dragStartPos, dragSessionPosition, onSessionMove, isDialogOpen]);
+  }, [draggedSession, dragStartPos, dragSessionPosition, onSessionMove, isDialogOpen, daysPerView]);
 
   // Track initial mount to determine scroll behavior
   const [isInitialMount, setIsInitialMount] = useState(true);
@@ -189,23 +205,6 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
         scrollContainerRef.current.scrollTo({
           top: savedScrollPosition,
           behavior: 'smooth'
-        });
-      } else {
-        // First mount or no saved position: scroll to current time
-        const currentHour = currentTime.getHours();
-        const currentMinutes = currentTime.getMinutes();
-        const hourHeight = 60;
-        
-        const currentPosition = (currentHour * hourHeight) + (currentMinutes / 60 * hourHeight);
-        // 2-hour buffer = 2 * 60px = 120px
-        // On mobile, center the current time more for better visibility
-        const buffer = isMobile ? 2.5 * hourHeight : 2 * hourHeight;
-        const scrollPosition = Math.max(0, currentPosition - buffer);
-        
-        // Use instant scroll on mount, smooth on week change
-        scrollContainerRef.current.scrollTo({
-          top: scrollPosition,
-          behavior: isInitialMount ? 'auto' : 'smooth'
         });
       }
       
@@ -378,12 +377,20 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     // CRITICAL FIX (v0.6.4): Check completed status FIRST, regardless of courseId
     // This allows unassigned sessions to show as green when marked attended and assigned to a course
     if (session.completed) {
-      // Check if this was attended (has completionPercentage > 0) or not attended
+      // Completed sessions: green if attended (>0%), otherwise evaluate if past or gray if future
+      const endDateStr = session.endDate || session.date;
+      const [y, m, d] = endDateStr.split('-').map(Number);
+      const [eh, em] = (session.endTime || '00:00').split(':').map(Number);
+      const end = new Date(y, (m || 1) - 1, d || 1, eh || 0, em || 0);
+      const isPast = end.getTime() < new Date().getTime();
       if (session.completionPercentage && session.completionPercentage > 0) {
         return 'bg-green-50 border-green-500 text-green-900 shadow-sm';
-      } else {
-        return 'bg-gray-100 border-gray-400 text-gray-600 shadow-sm';
       }
+      // Completed with 0% (not attended) → treat as needs evaluation when in the past
+      if (isPast) {
+        return 'bg-red-50 border-red-500 text-red-900 shadow-sm';
+      }
+      return 'bg-gray-100 border-gray-400 text-gray-600 shadow-sm';
     }
     
     // Unassigned sessions (blockers) - neutral gray styling
@@ -542,6 +549,99 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
     };
   };
 
+  // Compute start/end minutes for a session as it appears on a given date (for overlap layout)
+  const getDayStartEndMinutes = (session: ScheduledSession, currentDate: Date): { start: number; end: number } => {
+    // If multi-day, clamp to the portion visible on this date
+    if (session.endDate && session.endDate !== session.date) {
+      const sessionStart = new Date(session.date);
+      const sessionEnd = new Date(session.endDate);
+      const current = new Date(currentDate);
+      sessionStart.setHours(0, 0, 0, 0);
+      sessionEnd.setHours(0, 0, 0, 0);
+      current.setHours(0, 0, 0, 0);
+
+      const [startHour, startMin] = session.startTime.split(':').map(Number);
+      const [endHour, endMin] = session.endTime.split(':').map(Number);
+
+      if (current.getTime() === sessionStart.getTime()) {
+        return { start: startHour * 60 + startMin, end: 24 * 60 };
+      }
+      if (current.getTime() === sessionEnd.getTime()) {
+        return { start: 0, end: endHour * 60 + endMin };
+      }
+      if (current > sessionStart && current < sessionEnd) {
+        return { start: 0, end: 24 * 60 };
+      }
+    }
+
+    // Single-day (or same-day) session
+    const [startHour, startMin] = session.startTime.split(':').map(Number);
+    const start = startHour * 60 + startMin;
+    const end = Math.min(24 * 60, start + session.durationMinutes);
+    return { start, end };
+  };
+
+  // Compute side-by-side layout for overlapping sessions within a day
+  const computeDayOverlapLayout = (sessionsForDay: ScheduledSession[], date: Date): Map<string, { col: number; totalCols: number }> => {
+    const intervals = sessionsForDay.map(s => {
+      const { start, end } = getDayStartEndMinutes(s, date);
+      return { session: s, start, end, col: -1 };
+    }).sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+    type Interval = typeof intervals[number];
+
+    const layout = new Map<string, { col: number; totalCols: number }>();
+    if (intervals.length === 0) return layout;
+
+    let group: Interval[] = [];
+    let groupMaxEnd = -1;
+
+    const finalizeGroup = () => {
+      if (group.length === 0) return;
+      // Assign columns within the group using sweep line
+      const active: { end: number; col: number }[] = [];
+      let usedColsMax = 0;
+      for (const item of group) {
+        // remove ended
+        for (let i = active.length - 1; i >= 0; i--) {
+          if (active[i].end <= item.start) active.splice(i, 1);
+        }
+        // find first free column
+        const used = new Set(active.map(a => a.col));
+        let col = 0;
+        while (used.has(col)) col++;
+        item.col = col;
+        active.push({ end: item.end, col });
+        usedColsMax = Math.max(usedColsMax, col + 1);
+      }
+      // Record layout for each item
+      for (const item of group) {
+        layout.set(item.session.id, { col: item.col, totalCols: usedColsMax });
+      }
+      // reset for next group
+      group = [];
+      groupMaxEnd = -1;
+    };
+
+    for (const item of intervals) {
+      if (group.length === 0) {
+        group.push(item);
+        groupMaxEnd = item.end;
+      } else if (item.start < groupMaxEnd) {
+        group.push(item);
+        groupMaxEnd = Math.max(groupMaxEnd, item.end);
+      } else {
+        // No overlap with current group; finalize and start a new one
+        finalizeGroup();
+        group.push(item);
+        groupMaxEnd = item.end;
+      }
+    }
+    // Finalize the last group
+    finalizeGroup();
+
+    return layout;
+  };
+
   const getCurrentTimePosition = (): { position: number; isVisible: boolean } => {
     const hourHeight = 60;
     const hours = currentTime.getHours();
@@ -654,7 +754,7 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
   if (draggedSession && dragStartPos && dragSessionPosition && onSessionMove) {
       const hourHeight = 60;
       const dayWidth = scrollContainerRef.current ? 
-        (scrollContainerRef.current.clientWidth - 56) / 7 : 100; // Subtract time column width
+        (scrollContainerRef.current.clientWidth - 56) / daysPerView : 100; // Subtract time column width
       
       // Calculate day offset (how many days moved) relative to drag start position
       const dayOffset = Math.round((dragSessionPosition.x - dragStartPos.x) / dayWidth);
@@ -860,8 +960,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
       
       <Card className="overflow-hidden flex flex-col lg:h-full relative">
       <CardHeader className="py-3 border-b flex-shrink-0 flex flex-wrap items-start justify-between gap-3">
-          {/* Week navigation + mobile month below */}
-          <div className="flex flex-col gap-1 lg:flex-row lg:items-center lg:gap-2">
+          {/* Week navigation; mobile arranged as two rows */}
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-2 w-full">
             <Button
               variant="outline"
               size="sm"
@@ -870,14 +970,42 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
             >
               <ChevronLeft className="w-4 h-4" />
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={goToToday}
-              className="font-semibold hover:bg-gray-100 hover:border-gray-400 shadow-none h-8 px-3"
-            >
-              Heute
-            </Button>
+            {/* Mobile row 1: Heute button */}
+            <div className="lg:hidden w-full flex justify-between items-center px-2">
+              {/* Week badge on left for quick context */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center justify-center w-8 h-8 rounded-md border border-gray-300 bg-white shadow-sm">
+                  <span className="text-xs font-semibold">{getWeekNumber(weekStart)}</span>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={goToToday}
+                className="font-semibold hover:bg-gray-100 hover:border-gray-400 shadow-none h-9 px-4 rounded-full"
+              >
+                Heute
+              </Button>
+              {/* Left/right week nav on right for quick swipe alternative */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => goToWeek(currentWeekOffset - 1)}
+                  className="hover:bg-gray-100 hover:border-gray-400 shadow-none h-8 w-8 p-0"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => goToWeek(currentWeekOffset + 1)}
+                  className="hover:bg-gray-100 hover:border-gray-400 shadow-none h-8 w-8 p-0"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -886,10 +1014,31 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
             >
               <ChevronRight className="w-4 h-4" />
             </Button>
-            {/* Mobile month name (below controls) */}
-            <CardTitle className="lg:hidden text-lg font-bold mt-1 w-full text-center">
-              {weekStart.toLocaleDateString('de-DE', { month: 'long' })}
-            </CardTitle>
+            {/* Mobile row 2: days-per-view toggle + month name on the right */}
+            {isMobile && (
+              <div className="lg:hidden mt-1 w-full flex items-center justify-between px-2">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-3 rounded-full"
+                    onClick={() => {
+                      const next = mobileDaysPerView === 4 ? 7 : 4;
+                      setMobileDaysPerView(next);
+                      try { localStorage.setItem(MOBILE_DAYS_PREF_KEY, String(next)); } catch {
+                        // noop: ignore storage write failure
+                      }
+                    }}
+                  >
+                    {mobileDaysPerView === 4 ? '4 Tage' : '7 Tage'}
+                  </Button>
+                  <span className="text-xs text-gray-500">Ansicht</span>
+                </div>
+                <CardTitle className="text-lg font-bold pr-1">
+                  {weekStart.toLocaleDateString('de-DE', { month: 'long' })}
+                </CardTitle>
+              </div>
+            )}
           </div>
           
           {/* Month name - centered and prominent */}
@@ -1171,9 +1320,10 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
               </div>
 
               {/* Day columns */}
-              <div className="flex-1 grid grid-cols-7 relative">
-                {weekDays.map((date, dayIdx) => {
+              <div className={`flex-1 grid ${daysPerView === 7 ? 'grid-cols-7' : 'grid-cols-4'} relative`}>
+                {weekDays.slice(0, daysPerView).map((date, dayIdx) => {
                   const daySessions = getSessionsForDay(date);
+                  const overlapLayout = computeDayOverlapLayout(daySessions, date);
                   const header = formatDayHeader(date);
                   const preview = getPreviewForDate(date);
                   
@@ -1235,20 +1385,28 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                         {/* Sessions */}
                         {daySessions.map((session) => {
                           const pos = calculateSessionPosition(session, date);
+                          const layoutInfo = overlapLayout.get(session.id) || { col: 0, totalCols: 1 };
+                          const totalCols = Math.max(1, layoutInfo.totalCols);
+                          const col = Math.min(layoutInfo.col, totalCols - 1);
+                          const gutterPx = 2; // gap between columns
+                          const leftCalc = `calc(4px + (${col} * (100% - 8px) / ${totalCols}))`;
+                          const widthCalc = `calc((100% - 8px) / ${totalCols} - ${gutterPx}px)`;
                           const isDragging = draggedSession?.id === session.id;
                           // Only mark the actual preview object as preview (by reference),
                           // not any other session with the same id. This prevents duplicate keys/rendering.
                           const isPreview = !!previewSession && session === previewSession;
                           // ...existing session rendering logic...
                           let needsEvaluation = false;
-                          if (session.endTime && !session.completed) {
+                          if (session.endTime) {
                             try {
                               const endDateStr = session.endDate || session.date;
                               const [year, month, day] = endDateStr.split('-').map(Number);
                               const [endHour, endMinute] = session.endTime.split(':').map(Number);
                               const sessionEndDate = new Date(year, month - 1, day, endHour, endMinute, 0, 0);
                               const now = new Date();
-                              needsEvaluation = sessionEndDate.getTime() < now.getTime();
+                              const isPast = sessionEndDate.getTime() < now.getTime();
+                              // Needs evaluation if past and either not completed or completed with 0%
+                              needsEvaluation = isPast && (!session.completed || !session.completionPercentage || session.completionPercentage === 0);
                             } catch {
                               // If parsing fails, fail open (leave without evaluation flag)
                             }
@@ -1262,8 +1420,8 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                               className={`rounded-lg border px-2 py-1.5 ${isPreview ? 'pointer-events-none' : 'cursor-pointer hover:shadow-lg'} transition-all ${getSessionColor(session)}`}
                               style={{
                                 position: 'absolute',
-                                left: '4px',
-                                right: '4px',
+                                left: leftCalc,
+                                width: widthCalc,
                                 top: `${pos.top}px`,
                                 height: `${pos.height}px`,
                                 zIndex: isPreview ? 20 : 10,
@@ -1281,7 +1439,23 @@ export function WeekCalendar({ sessions, courses, onSessionClick, onCreateSessio
                                 }
                               }}
                             >
-                              <div className="text-xs leading-tight font-medium break-words">{getCourseName(session.courseId)}</div>
+                              {(() => {
+                                const clampLines = pos.height >= 36 ? 2 : 1;
+                                return (
+                                  <div
+                                    className="text-xs leading-tight font-medium overflow-hidden"
+                                    style={{
+                                      display: '-webkit-box',
+                                      WebkitBoxOrient: 'vertical',
+                                      WebkitLineClamp: clampLines,
+                                      wordBreak: 'break-word',
+                                      whiteSpace: 'normal',
+                                    }}
+                                  >
+                                    {getCourseName(session.courseId)}
+                                  </div>
+                                );
+                              })()}
                               {needsEvaluation && (
                                 <div className="text-[10px] text-red-600 mt-0.5">Bewerten</div>
                               )}

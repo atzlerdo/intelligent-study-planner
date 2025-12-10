@@ -33,19 +33,19 @@
  * - Multi-day session support (sessions spanning midnight)
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { SessionAttendanceDialog } from './components/sessions/SessionAttendanceDialog';
 import { SessionFeedbackDialog } from './components/sessions/SessionFeedbackDialog';
 import { PastSessionsReviewDialog } from './components/sessions/PastSessionsReviewDialog';
 import { BottomNavigation } from './components/layout/BottomNavigation';
-import { CoursesView } from './components/courses/CoursesView';
+import { CoursesView, CoursesViewAddButton } from './components/courses/CoursesView';
 import { CourseDialog } from './components/courses/CourseDialog';
 import { StudyBlockDialog } from './components/StudyBlockDialog';
-import { CalendarView } from './components/CalendarView';
 import { SessionDialog } from './components/SessionDialog';
 import { OnboardingDialog } from './components/OnboardingDialog';
 import { Button } from './components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -66,7 +66,7 @@ import { generateMockSessions } from './lib/mockSessions';
 
 function App() {
   // View & sync triggers
-  const [currentView, setCurrentView] = useState<'dashboard' | 'courses' | 'calendar'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'courses'>('dashboard');
   const [autoSyncTrigger, setAutoSyncTrigger] = useState<number>(0);
 
   // Dialog visibility states
@@ -79,6 +79,8 @@ function App() {
   const [replanTotalMinutes, setReplanTotalMinutes] = useState(0);           // Total minutes covered by candidates
   const [missedSession, setMissedSession] = useState<ScheduledSession | null>(null); // Original missed session
   const [replanHandled, setReplanHandled] = useState(false);                 // Flag to prevent duplicate replan prompts
+  // Track current authenticated user ID for per-user onboarding keys
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   
   // Merge helper to preserve local Google-moved sessions when backend data lags
   const mergeSessionsPreserveGoogle = (
@@ -180,30 +182,67 @@ function App() {
     return merged;
   };
 
-  // ============================================================================
-  // STUDY PROGRAM STATE - Degree progress tracking
-  // ============================================================================
-  
-  // Study program configuration loaded from backend database
-  // Default values used until first fetch completes
-  const [studyProgram, setStudyProgram] = useState<StudyProgram>({
-    totalECTS: 180,      // Bachelor's degree total (6 semesters)
-    completedECTS: 0,    // ECTS earned so far
-    hoursPerECTS: 27.5,  // German standard: 1 ECTS = 27.5 hours
-  });
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);   // Current authenticated user ID
-
-  // Trigger sync when dashboard view is shown
-  useEffect(() => {
-    if (currentView === 'dashboard') {
-      setAutoSyncTrigger(Date.now());
+  // Utility: Recalculate scheduled/completed hours and progress from sessions
+  const recalcCourseHours = (coursesIn: Course[], sessionsIn: ScheduledSession[]): Course[] => {
+    const now = new Date();
+    const scheduledHoursByCourse = new Map<string, number>();
+    const completedHoursByCourse = new Map<string, number>();
+    for (const s of sessionsIn) {
+      if (!s.courseId) continue;
+      const end = new Date(`${s.date}T${s.endTime}`);
+      const hours = s.durationMinutes / 60;
+      if (end > now && !s.completed) {
+        scheduledHoursByCourse.set(s.courseId, (scheduledHoursByCourse.get(s.courseId) || 0) + hours);
+      }
+      if (s.completed) {
+        completedHoursByCourse.set(s.courseId, (completedHoursByCourse.get(s.courseId) || 0) + hours);
+      }
     }
-  }, [currentView]);
+    return coursesIn.map(c => {
+      const completedHours = completedHoursByCourse.get(c.id) || 0;
+      const scheduledHours = scheduledHoursByCourse.get(c.id) || 0;
+      const progress = Math.min(Math.round((completedHours / c.estimatedHours) * 100), 100);
 
-  // Initial client-only onboarding check removed; handled after auth per user
-  useEffect(() => {
-    // no-op, reserved for future non-auth initialization
-  }, []);
+      // Diagnostic logging for testcourse to analyze progress calculations
+      if (c.name && c.name.toLowerCase() === 'testcourse') {
+        try {
+          const sessionsForCourse = sessionsIn.filter(ss => ss.courseId === c.id);
+          const breakdown = sessionsForCourse.map(ss => {
+            const end = new Date(`${ss.date}T${ss.endTime}`);
+            const hours = ss.durationMinutes / 60;
+            const contributesScheduled = end > now && !ss.completed;
+            const contributesCompleted = !!ss.completed;
+            const classification = contributesCompleted
+              ? 'completed(+completedHours)'
+              : (contributesScheduled ? 'future-incomplete(+scheduledHours)' : 'past-incomplete(ignored)');
+            return {
+              id: ss.id,
+              date: ss.date,
+              start: ss.startTime,
+              end: ss.endTime,
+              durationMinutes: ss.durationMinutes,
+              hours,
+              completed: !!ss.completed,
+              endGtNow: end > now,
+              classification
+            };
+          });
+          // Grouped, concise output
+          console.log('[ProgressDiag] testcourse breakdown', {
+            courseId: c.id,
+            estimatedHours: c.estimatedHours,
+            totals: { completedHours, scheduledHours, progress },
+            sessions: breakdown
+          });
+        } catch (e) {
+          console.warn('[ProgressDiag] logging failed for testcourse', e);
+        }
+      }
+      return { ...c, completedHours, scheduledHours, progress } as Course;
+    });
+  };
+
+  // Removed duplicate study program state and unrelated currentUserId; handled above and via auth load
 
   const handleOnboardingComplete = async (program: StudyProgram) => {
     try {
@@ -828,6 +867,45 @@ function App() {
   // Track if we've already checked for past sessions on this login session
   const hasCheckedPastSessions = useRef(false);
 
+  // Study program state (initialized with sane defaults to avoid null issues)
+  const [studyProgram, setStudyProgram] = useState<StudyProgram>({
+    totalECTS: 180,
+    completedECTS: 0,
+    hoursPerECTS: 27.5,
+  });
+  
+  const recalcStudyProgramFromCourses = useCallback((coursesIn: Course[]) => {
+    const totalEstimated = coursesIn.reduce((sum, c) => sum + (c.estimatedHours || 0), 0);
+    const totalCompleted = coursesIn.reduce((sum, c) => sum + (c.completedHours || 0), 0);
+    const completedECTS = coursesIn.reduce((sum, c) => sum + (c.status === 'completed' ? (c.ects || 0) : 0), 0);
+    setStudyProgram(prev => {
+      const updated: StudyProgram = {
+        ...prev,
+        completedECTS,
+        // @ts-expect-error client-only aggregate fields
+        aggregatedCompletedHours: totalCompleted,
+        // @ts-expect-error client-only aggregate fields
+        aggregatedEstimatedHours: totalEstimated,
+      };
+      if (isAuthenticated() && updated.completedECTS !== prev.completedECTS) {
+        apiUpdateStudyProgram({ ...updated, aggregatedCompletedHours: undefined, aggregatedEstimatedHours: undefined } as unknown as StudyProgram).catch(() => {});
+      }
+      return updated;
+    });
+  }, []);
+
+  // Recalculate study program aggregates from courses (single source, functional update)
+  // Note: definition above uses functional setState to avoid dependency loops
+
+  // Keep study program overview in sync when courses change
+  useEffect(() => {
+    if (!isAuthenticated()) return;
+    if (courses && courses.length >= 0) {
+      recalcStudyProgramFromCourses(courses);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courses]);
+
   useEffect(() => {
     const run = async () => {
       if (!isAuthenticated()) {
@@ -879,7 +957,35 @@ function App() {
         
         setCourses(coursesWithUpdatedScheduledHours);
         setScheduledSessions(sessions as ScheduledSession[]);
-        setStudyProgram(program);
+
+        // Ensure ECTS completion reflects completed courses when user starts mid-studies
+        const completedECTSFromCourses = (courses as Course[])
+          .filter(c => c.status === 'completed')
+          .reduce((sum, c) => sum + (c.ects || 0), 0);
+
+        const normalizedProgram: StudyProgram = {
+          totalECTS: program.totalECTS ?? 180,
+          hoursPerECTS: program.hoursPerECTS ?? 27.5,
+          // Trust backend if it already tracks completedECTS; otherwise derive from courses
+          completedECTS: (program.completedECTS && program.completedECTS > 0)
+            ? program.completedECTS
+            : completedECTSFromCourses,
+        };
+
+        setStudyProgram(normalizedProgram);
+
+        // Persist normalization so reloads reflect accurate mid-study ECTS
+        try {
+          if ((program.completedECTS ?? 0) === 0 && completedECTSFromCourses > 0) {
+            await apiUpdateStudyProgram({
+              totalECTS: normalizedProgram.totalECTS,
+              completedECTS: normalizedProgram.completedECTS,
+              hoursPerECTS: normalizedProgram.hoursPerECTS,
+            });
+          }
+        } catch (persistErr) {
+          console.warn('Study program normalization persistence skipped:', persistErr);
+        }
       } catch (e) {
         console.error('Initial load failed', e);
         // If API calls fail (e.g., database down or invalid token), clear auth and force re-login
@@ -929,6 +1035,18 @@ function App() {
 
   // Calculate weekly capacity
   const weeklyCapacity = calculateWeeklyAvailableMinutes(studyBlocks);
+
+  // Keep course progress bars in sync with calendar sessions.
+  // Whenever the sessions list changes (create/edit/delete/import),
+  // recompute each course's scheduled/completed hours and progress from sessions.
+  useEffect(() => {
+    if (!isAuthenticated()) return;
+    if (courses.length > 0) {
+      const recomputed = recalcCourseHours(courses as Course[], scheduledSessions as ScheduledSession[]);
+      setCourses(recomputed as Course[]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduledSessions]);
 
   /**
    * Recalculate course completedHours from attended sessions in the database
@@ -1065,16 +1183,24 @@ function App() {
       // Persist the session update (cast needed for dynamic payload structure)
       await apiUpdateSession(feedbackSession.id, payload as Partial<typeof feedbackSession>);
 
+      // Optimistic UI: immediately reflect completion state for the session
+      setScheduledSessions(prev => prev.map(s => (
+        s.id === feedbackSession.id ? { ...s, completed: !!feedback.completed } : s
+      )));
+
       // Update course completedHours and progress on backend if applicable
       const targetCourseId = feedback.selectedCourseId || feedbackSession.courseId;
       if (targetCourseId && feedback.completed) {
         // Find the course to calculate new values
         const targetCourse = courses.find(c => c.id === targetCourseId);
         if (targetCourse) {
-          // CRITICAL FIX: Only add hours if the session was NOT already marked completed
-          // This prevents duplicate hour counting when user marks same session multiple times
+          // Only add hours if this action transitions the session to completed
+          // This prevents duplicate hour counting and fixes retroactive past-session evaluation
           const wasAlreadyCompleted = feedbackSession.completed;
-          const hoursToAdd = wasAlreadyCompleted ? 0 : feedback.completedHours;
+          const isNowCompleted = !!feedback.completed;
+          const transitionedToCompleted = !wasAlreadyCompleted && isNowCompleted;
+          const safeCompletedHours = Math.max(0, feedback.completedHours || 0);
+          const hoursToAdd = transitionedToCompleted ? safeCompletedHours : 0;
           const newCompletedHours = targetCourse.completedHours + hoursToAdd;
           const newProgress = Math.min(Math.round((newCompletedHours / targetCourse.estimatedHours) * 100), 100);
           
@@ -1084,6 +1210,7 @@ function App() {
             new: newCompletedHours,
             progress: newProgress,
             wasAlreadyCompleted,
+            transitionedToCompleted,
             idempotent: hoursToAdd === 0 ? '✅ No duplicate hours added' : '➕ Adding hours for first-time completion'
           });
           
@@ -1098,36 +1225,48 @@ function App() {
       // Now refresh from backend to get authoritative data while preserving Google-moved sessions
       const [freshCourses, freshSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       
-      // CRITICAL FIX (v0.6.8): Recalculate scheduledHours to prevent stale values from backend
+      // Recalculate course hours from fresh sessions to prevent stale values
       const now = new Date();
       const scheduledHoursByCourse = new Map<string, number>();
+      const completedHoursByCourse = new Map<string, number>();
       
       for (const session of freshSessions) {
         if (!session.courseId) continue;
         
         // Parse session end time to determine if it's in the future
         const sessionEndDateTime = new Date(`${session.date}T${session.endTime}`);
-        if (sessionEndDateTime <= now) continue; // Skip past sessions
-        
         const hours = session.durationMinutes / 60;
-        const current = scheduledHoursByCourse.get(session.courseId) || 0;
-        scheduledHoursByCourse.set(session.courseId, current + hours);
+
+        // Scheduled = future, incomplete
+        if (sessionEndDateTime > now && !session.completed) {
+          const current = scheduledHoursByCourse.get(session.courseId) || 0;
+          scheduledHoursByCourse.set(session.courseId, current + hours);
+        }
+
+        // Completed = attended sessions only (whether past or future, but must be marked completed)
+        if (session.completed) {
+          const currentCompleted = completedHoursByCourse.get(session.courseId) || 0;
+          completedHoursByCourse.set(session.courseId, currentCompleted + hours);
+        }
       }
       
       const coursesWithUpdatedHours = freshCourses.map(course => {
-        const oldScheduledHours = course.scheduledHours;
         const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
-        if (oldScheduledHours !== newScheduledHours) {
-          console.log(`📊 Attendance update - Course ${course.name}: scheduledHours ${oldScheduledHours}h → ${newScheduledHours}h`);
-        }
+        const newCompletedHours = completedHoursByCourse.get(course.id) || 0;
+        const newProgress = Math.min(Math.round((newCompletedHours / course.estimatedHours) * 100), 100);
+
         return {
           ...course,
-          scheduledHours: newScheduledHours
-        };
+          scheduledHours: newScheduledHours,
+          completedHours: newCompletedHours,
+          progress: newProgress,
+        } as Course;
       });
       
       setCourses(coursesWithUpdatedHours as Course[]);
       setScheduledSessions(prev => mergeSessionsPreserveGoogle(prev, freshSessions as ScheduledSession[]));
+      // Update study program overview immediately
+      recalcStudyProgramFromCourses(coursesWithUpdatedHours as Course[]);
 
       // Handle milestones (these are not automatically persisted yet, so keep optimistic UI)
       if (targetCourseId && (feedback.newMilestones?.length || feedback.completedMilestones?.length)) {
@@ -1231,15 +1370,40 @@ function App() {
     }
   };
 
+  // In-app delete course dialog state
+  const [showDeleteCourseDialog, setShowDeleteCourseDialog] = useState(false);
+  const [courseToDelete, setCourseToDelete] = useState<Course | undefined>(undefined);
+
+  const requestDeleteCourse = (course: Course) => {
+    setCourseToDelete(course);
+    setShowDeleteCourseDialog(true);
+  };
+
   const handleDeleteCourse = async (courseId: string) => {
-    if (!confirm('Möchtest du diesen Kurs wirklich löschen?')) return;
+    // Optimistic UI update: remove course locally immediately
+    setCourses(prev => prev.filter(c => c.id !== courseId));
+    setScheduledSessions(prev => prev.filter(s => s.courseId !== courseId));
     try {
       await apiDeleteCourse(courseId);
       const [courses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
       setCourses(courses as Course[]);
       setScheduledSessions(sessions as ScheduledSession[]);
+      // Recompute study program overview
+      recalcStudyProgramFromCourses(courses as Course[]);
     } catch (e) {
       console.error('Delete course failed', e);
+      // If deletion failed, trigger a full refresh to reconcile state
+      try {
+        const [courses, sessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
+        setCourses(courses as Course[]);
+        setScheduledSessions(sessions as ScheduledSession[]);
+        recalcStudyProgramFromCourses(courses as Course[]);
+      } catch (refreshErr) {
+        console.warn('Fallback refresh after delete failed', refreshErr);
+      }
+    } finally {
+      setShowDeleteCourseDialog(false);
+      setCourseToDelete(undefined);
     }
   };
 
@@ -1296,6 +1460,7 @@ function App() {
 
 
   // Session CRUD operations
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleAddSession = () => {
     setEditingSession(undefined);
     setShowSessionDialog(true);
@@ -1322,7 +1487,8 @@ function App() {
       isPast: sessionEndDate < now 
     });
     
-    if (sessionEndDate < now && !session.completed) {
+    const needsEval = sessionEndDate < now && (!session.completed || !session.completionPercentage || session.completionPercentage === 0);
+    if (needsEval) {
       // Past session - first ask if attended
       console.log('👉 Opening attendance dialog (past session)');
       setFeedbackSession(session);
@@ -1649,33 +1815,8 @@ function App() {
         totalWithoutGoogleEventId: freshSessions.filter(s => !s.googleEventId).length
       });
       
-      // Recalculate scheduledHours for all courses (only count FUTURE sessions)
-      const now = new Date();
-      const scheduledHoursByCourse = new Map<string, number>();
-      
-      for (const session of freshSessions) {
-        if (!session.courseId) continue;
-        
-        // Parse session end time to determine if it's in the future
-        const sessionEndDateTime = new Date(`${session.date}T${session.endTime}`);
-        if (sessionEndDateTime <= now) continue; // Skip past sessions
-        
-        const hours = session.durationMinutes / 60;
-        const current = scheduledHoursByCourse.get(session.courseId) || 0;
-        scheduledHoursByCourse.set(session.courseId, current + hours);
-      }
-      
-      const coursesWithUpdatedHours = freshCourses.map(course => {
-        const oldScheduledHours = course.scheduledHours;
-        const newScheduledHours = scheduledHoursByCourse.get(course.id) || 0;
-        if (oldScheduledHours !== newScheduledHours) {
-          console.log(`📊 Course ${course.name}: scheduledHours ${oldScheduledHours}h → ${newScheduledHours}h`);
-        }
-        return {
-          ...course,
-          scheduledHours: newScheduledHours
-        };
-      });
+      // Recalculate scheduled/completed hours and progress for all courses
+      const coursesWithUpdatedHours = recalcCourseHours(freshCourses as Course[], freshSessions as ScheduledSession[]);
       
       console.log('💾 SETTING STATE: About to update React state with fresh sessions');
       console.log('🔍 STATE UPDATE VERIFICATION:', {
@@ -1788,7 +1929,9 @@ function App() {
       
       // Refresh again to get updated statuses
       const [finalCourses, finalSessions] = await Promise.all([apiGetCourses(), apiGetSessions()]);
-      setCourses(finalCourses as Course[]);
+      // Recalculate hours and progress after deletion
+      const recalculatedAfterDelete = recalcCourseHours(finalCourses as Course[], finalSessions as ScheduledSession[]);
+      setCourses(recalculatedAfterDelete as Course[]);
       setScheduledSessions(finalSessions as ScheduledSession[]);
       console.log('  ✅ Courses and sessions refreshed from backend');
     } catch (e: unknown) {
@@ -1843,6 +1986,7 @@ function App() {
   // (removed debug instrumentation)
 
   // Bulk delete all sessions (user wants to reset calendar)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleDeleteAllSessions = async () => {
     try {
       console.log('🗑️ App: Bulk deleting ALL sessions');
@@ -2288,8 +2432,31 @@ function App() {
               sessions = loadedSessions as ScheduledSession[];
             }
             
-            setCourses(courses);
-            setScheduledSessions(sessions);
+            // Force progress bars to recalculate from sessions immediately after login
+            {
+              const now = new Date();
+              const scheduledHoursByCourse = new Map<string, number>();
+              const completedHoursByCourse = new Map<string, number>();
+              for (const s of sessions) {
+                if (!s.courseId) continue;
+                const end = new Date(`${s.date}T${s.endTime}`);
+                const hours = s.durationMinutes / 60;
+                if (end > now && !s.completed) {
+                  scheduledHoursByCourse.set(s.courseId, (scheduledHoursByCourse.get(s.courseId) || 0) + hours);
+                }
+                if (s.completed) {
+                  completedHoursByCourse.set(s.courseId, (completedHoursByCourse.get(s.courseId) || 0) + hours);
+                }
+              }
+              const recalculatedCourses = courses.map(c => {
+                const completedHours = completedHoursByCourse.get(c.id) || 0;
+                const scheduledHours = scheduledHoursByCourse.get(c.id) || 0;
+                const progress = Math.min(Math.round((completedHours / c.estimatedHours) * 100), 100);
+                return { ...c, completedHours, scheduledHours, progress } as Course;
+              });
+              setCourses(recalculatedCourses);
+              setScheduledSessions(sessions);
+            }
             
             // Calculate completed ECTS from completed courses and sync with backend if needed
             const completedCoursesECTS = courses
@@ -2600,22 +2767,17 @@ function App() {
             onAddCourse={handleAddCourse}
             onEditCourse={handleEditCourse}
             onDeleteCourse={handleDeleteCourse}
+            onRequestDeleteCourse={requestDeleteCourse}
             onCompleteCourse={handleCompleteCourse}
             onViewChange={setCurrentView}
           />
         )}
 
-        {currentView === 'calendar' && (
-          <CalendarView
-            sessions={scheduledSessions}
-            courses={courses}
-            onAddSession={handleAddSession}
-            onEditSession={handleEditSession}
-            onDeleteAllSessions={handleDeleteAllSessions}
-            onDeleteSession={handleDeleteSession}
-            onViewChange={setCurrentView}
-          />
+        {currentView === 'courses' && (
+          <CoursesViewAddButton onAddCourse={handleAddCourse} />
         )}
+
+        {/* Calendar view removed (not in use) */}
       </div>
 
       {/* Mobile Bottom Navigation - Only visible on mobile */}
@@ -2623,8 +2785,40 @@ function App() {
         <BottomNavigation 
           currentView={currentView}
           onViewChange={setCurrentView}
+          onLogout={() => {
+            // Clear auth and force the auth gate to show
+            logout();
+            setAuthChecked(false);
+            setCurrentView('dashboard');
+            // Optional: clear lightweight UI states to avoid residual views
+            setShowOnboarding(false);
+            setShowPastSessionsReview(false);
+            setShowAttendanceDialog(false);
+            setShowFeedbackDialog(false);
+            setShowReplanDialog(false);
+          }}
         />
       </div>
+
+      {/* Delete Course Confirmation Dialog */}
+      <Dialog open={showDeleteCourseDialog} onOpenChange={setShowDeleteCourseDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Kurs löschen</DialogTitle>
+            <DialogDescription>
+              {courseToDelete ? `Möchtest du den Kurs "${courseToDelete.name}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.` : 'Möchtest du diesen Kurs wirklich löschen?'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => { setShowDeleteCourseDialog(false); setCourseToDelete(undefined); }}>
+              Abbrechen
+            </Button>
+            <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => courseToDelete && handleDeleteCourse(courseToDelete.id)}>
+              Löschen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

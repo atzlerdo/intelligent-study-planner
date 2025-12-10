@@ -65,9 +65,14 @@ export function Dashboard({ courses, studyProgram, scheduledSessions, onSessionC
     perCourse: activeCourses.map(c => ({ name: c.name, scheduledHours: c.scheduledHours }))
   });
   
-  // Calculate total completed hours from all courses (not just finished courses)
-  const completedHoursFromCourses = courses
-    .reduce((sum, c) => sum + c.completedHours, 0);
+  // Calculate total completed hours from all courses
+  // Fallback: for completed courses with no recorded completedHours, use ects × hoursPerECTS
+  const completedHoursFromCourses = courses.reduce((sum, c) => {
+    const recorded = c.completedHours || 0;
+    if (recorded > 0) return sum + recorded;
+    if (c.status === 'completed') return sum + (c.ects * studyProgram.hoursPerECTS);
+    return sum;
+  }, 0);
   
   // Add the initial completed ECTS from onboarding (already achieved before using the app)
   // This ensures pre-existing achievements are shown in the progress bar

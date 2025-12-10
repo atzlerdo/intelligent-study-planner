@@ -10,11 +10,12 @@ interface CoursesViewProps {
   onAddCourse: () => void;
   onEditCourse: (course: Course) => void;
   onDeleteCourse: (courseId: string) => void;
+  onRequestDeleteCourse?: (course: Course) => void;
   onCompleteCourse: (courseId: string) => void;
   onViewChange: (view: 'dashboard' | 'courses' | 'calendar') => void;
 }
 
-export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCourse, onDeleteCourse }: CoursesViewProps) {
+export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCourse, onDeleteCourse, onRequestDeleteCourse }: CoursesViewProps) {
   // Calculate actual course status based on sessions and progress
   const getCourseActualStatus = (course: Course): 'planned' | 'active' | 'completed' | null => {
     // If course is marked as completed, keep it
@@ -69,6 +70,14 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
     const actualStatus = getCourseActualStatus(course);
     const hasStarted = actualStatus === 'active' || actualStatus === 'completed' || actualStatus === 'planned';
     const isCompleted = actualStatus === 'completed';
+    const estimated = course.estimatedHours > 0 ? course.estimatedHours : 0;
+    const completed = Math.max(0, Math.min(course.completedHours, estimated));
+    const scheduled = Math.max(0, Math.min(course.scheduledHours, Math.max(0, estimated - completed)));
+    const remaining = Math.max(0, estimated - completed - scheduled);
+    const totalForWidth = estimated > 0 ? estimated : completed + scheduled + remaining; // fallback if estimated is 0
+    const completedPct = totalForWidth > 0 ? (completed / totalForWidth) * 100 : 0;
+    const scheduledPct = totalForWidth > 0 ? (scheduled / totalForWidth) * 100 : 0;
+    const remainingPct = Math.max(0, 100 - completedPct - scheduledPct);
     
     return (
       <Card key={course.id} className={`transition-shadow h-full flex flex-col ${isCompleted ? 'opacity-50 bg-gray-50' : 'hover:shadow-lg'}`}>
@@ -97,7 +106,9 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
                 size="icon"
                 className="h-7 w-7"
                 onClick={() => {
-                  if (confirm('Möchtest du diesen Kurs wirklich löschen?')) {
+                  if (onRequestDeleteCourse) {
+                    onRequestDeleteCourse(course);
+                  } else {
                     onDeleteCourse(course.id);
                   }
                 }}
@@ -138,7 +149,9 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
                   size="icon"
                   className="h-7 w-7"
                   onClick={() => {
-                    if (confirm('Möchtest du diesen Kurs wirklich löschen?')) {
+                    if (onRequestDeleteCourse) {
+                      onRequestDeleteCourse(course);
+                    } else {
                       onDeleteCourse(course.id);
                     }
                   }}
@@ -190,60 +203,44 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs text-gray-600">
                       <span>Fortschritt</span>
-                      <span>{Math.round(course.completedHours)}h / {Math.round(course.estimatedHours)}h</span>
+                      <span>{Math.round(completed)}h / {Math.round(estimated)}h</span>
                     </div>
                     <div className="h-3 bg-gray-200 rounded-full overflow-hidden flex">
                       {/* Completed hours - Green */}
-                      {(() => {
-                        const actualWidth = (course.completedHours / course.estimatedHours) * 100;
-                        const minWidth = actualWidth > 0 ? 12 : 0;
-                        const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
-                        return displayWidth > 0 ? (
-                          <div 
-                            className="h-full bg-green-400 transition-all flex items-center justify-center"
-                            style={{ width: `${displayWidth}%` }}
-                          >
-                            <span className="text-xs px-2 truncate">
-                              {Math.round(course.completedHours)}h
-                            </span>
-                          </div>
-                        ) : null;
-                      })()}
+                      {completed > 0 ? (
+                        <div
+                          className="h-full bg-green-400 transition-all flex items-center justify-center"
+                          style={{ width: `${completedPct}%` }}
+                        >
+                          <span className="text-xs px-2 truncate">
+                            {Math.round(completed)}h
+                          </span>
+                        </div>
+                      ) : null}
                       
                       {/* Scheduled hours - Yellow */}
-                      {(() => {
-                        const actualWidth = (course.scheduledHours / course.estimatedHours) * 100;
-                        const minWidth = actualWidth > 0 ? 12 : 0;
-                        const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
-                        return displayWidth > 0 ? (
-                          <div 
-                            className="h-full bg-yellow-400 transition-all flex items-center justify-center"
-                            style={{ width: `${displayWidth}%` }}
-                          >
-                            <span className="text-xs text-gray-900 px-2 truncate">
-                              {Math.round(course.scheduledHours)}h
-                            </span>
-                          </div>
-                        ) : null;
-                      })()}
+                      {scheduled > 0 ? (
+                        <div
+                          className="h-full bg-yellow-400 transition-all flex items-center justify-center"
+                          style={{ width: `${scheduledPct}%` }}
+                        >
+                          <span className="text-xs text-gray-900 px-2 truncate">
+                            {Math.round(scheduled)}h
+                          </span>
+                        </div>
+                      ) : null}
                       
                       {/* Remaining/Open hours - Gray */}
-                      {(() => {
-                        const remaining = course.estimatedHours - course.completedHours - course.scheduledHours;
-                        const actualWidth = Math.max(0, (remaining / course.estimatedHours) * 100);
-                        const minWidth = actualWidth > 0 ? 12 : 0;
-                        const displayWidth = actualWidth > 0 ? Math.max(actualWidth, minWidth) : 0;
-                        return displayWidth > 0 ? (
-                          <div 
-                            className="h-full transition-all flex items-center justify-center"
-                            style={{ width: `${displayWidth}%` }}
-                          >
-                            <span className="text-xs text-gray-600 px-2 truncate">
-                              {Math.round(remaining)}h
-                            </span>
-                          </div>
-                        ) : null;
-                      })()}
+                      {remaining > 0 ? (
+                        <div
+                          className="h-full transition-all flex items-center justify-center"
+                          style={{ width: `${remainingPct}%` }}
+                        >
+                          <span className="text-xs text-gray-600 px-2 truncate">
+                            {Math.round(remaining)}h
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -315,14 +312,21 @@ export function CoursesView({ courses, scheduledSessions, onAddCourse, onEditCou
         )}
       </div>
       
-      {/* Floating Add Button */}
-      <Button
-        onClick={onAddCourse}
-        size="icon"
-        className="fixed bottom-20 right-6 h-14 w-14 rounded-full shadow-lg hover:shadow-xl transition-shadow z-50 lg:bottom-6"
-      >
-        <Plus className="w-6 h-6" />
-      </Button>
+      {/* Floating Add Button removed as requested */}
     </div>
+  );
+}
+
+// Bottom-right Add Course button, matching BottomNavigation burger menu style
+export function CoursesViewAddButton({ onAddCourse }: { onAddCourse: () => void }) {
+  return (
+    <button
+      onClick={onAddCourse}
+      className="fixed bottom-6 right-6 z-[70] w-16 h-16 rounded-full shadow-xl flex items-center justify-center transition-all duration-300 bg-gray-900 text-white hover:bg-gray-800 border-2 border-gray-700"
+      aria-label="Neuen Kurs hinzufügen"
+      title="Neuen Kurs hinzufügen"
+    >
+      <Plus className="w-7 h-7" />
+    </button>
   );
 }
